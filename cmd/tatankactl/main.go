@@ -1,482 +1,255 @@
 package main
 
 import (
-	"encoding/json"
+	"flag"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
-	"os/signal"
-	"sort"
-	"strings"
-	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
-	"github.com/jessevdk/go-flags"
-	"github.com/bisoncraft/mesh/tatanka/admin"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/bisoncraft/mesh/oracle"
 )
 
-// Command definitions
-type command struct {
-	description string
-	usage       string
-	help        string
-	run         func(args []string) error
+// rootModel is the top-level bubbletea model that routes between views.
+type rootModel struct {
+	api                    *apiClient
+	oracleData             *oracle.OracleSnapshot
+	activeView             viewID
+	menu                   menuModel
+	connections            connectionsModel
+	diff                   diffModel
+	oracle                 oracleModel
+	oracleDetail           oracleDetailModel
+	oracleAggregated       oracleAggregatedModel
+	oracleAggregatedDetail oracleAggregatedDetailModel
+	height                 int
+	wsCh                   chan tea.Msg
 }
 
-var commands = map[string]*command{}
-
-const globalOptions = `Global options:
-  -a, --address=  Admin server address (default: localhost:12366)`
-
-func init() {
-	commands["conns"] = &command{
-		description: "Display current node connections",
-		usage:       "tatankactl conns",
-		help: `Options:
-  (none)`,
-		run: runConns,
+func newRootModel(api *apiClient) rootModel {
+	return rootModel{
+		api:        api,
+		oracleData: newOracleSnapshot(),
+		activeView: viewMenu,
+		menu:       newMenuModel(),
+		wsCh:       make(chan tea.Msg, 20),
 	}
-	commands["watchconns"] = &command{
-		description: "Watch node connections in real-time",
-		usage:       "tatankactl watchconns",
-		help: `Options:
-  (none)
+}
 
-Press Ctrl+C to stop watching.`,
-		run: runWatchConns,
+func (m rootModel) Init() tea.Cmd {
+	return m.api.connectWebSocket(m.wsCh)
+}
+
+func renderTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return renderTickMsg(t)
+	})
+}
+
+func (m rootModel) isOracleView() bool {
+	switch m.activeView {
+	case viewOracleSources, viewOracleDetail, viewOracleAggregated, viewAggregatedDetail:
+		return true
 	}
-	commands["diff"] = &command{
-		description: "Show whitelist diff for a node with whitelist mismatch",
-		usage:       "tatankactl diff <peer_id>",
-		help: `Arguments:
-  peer_id         Peer ID (or prefix) to show diff for
+	return false
+}
 
-Options:
-  (none)
+func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			m.api.disconnectWebSocket()
+			return m, tea.Quit
+		}
 
-The peer must be in whitelist_mismatch state to show the diff.`,
-		run: runDiff,
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		// Propagate to active child
+		var cmd tea.Cmd
+		switch m.activeView {
+		case viewMenu:
+			m.menu, cmd = m.menu.Update(msg)
+			return m, cmd
+		case viewConnections:
+			m.connections, cmd = m.connections.Update(msg)
+			return m, cmd
+		case viewDiff:
+			m.diff, cmd = m.diff.Update(msg)
+			return m, cmd
+		case viewOracleSources:
+			m.oracle, cmd = m.oracle.Update(msg)
+			return m, cmd
+		case viewOracleDetail:
+			m.oracleDetail, cmd = m.oracleDetail.Update(msg)
+			return m, cmd
+		case viewOracleAggregated:
+			m.oracleAggregated, cmd = m.oracleAggregated.Update(msg)
+			return m, cmd
+		case viewAggregatedDetail:
+			m.oracleAggregatedDetail, cmd = m.oracleAggregatedDetail.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case navigateMsg:
+		switch msg.view {
+		case viewConnections:
+			m.activeView = viewConnections
+			m.connections.height = m.height
+			return m, nil
+		case viewOracleSources:
+			m.activeView = viewOracleSources
+			m.oracle = newOracleModel(m.oracleData)
+			m.oracle.height = m.height
+			return m, tea.Batch(m.oracle.Init(), renderTick())
+		case viewOracleAggregated:
+			m.activeView = viewOracleAggregated
+			m.oracleAggregated = newOracleAggregatedModel(m.oracleData)
+			m.oracleAggregated.height = m.height
+			return m, tea.Batch(m.oracleAggregated.Init(), renderTick())
+		}
+		return m, nil
+
+	case navigateBackMsg:
+		switch m.activeView {
+		case viewConnections:
+			m.activeView = viewMenu
+			return m, nil
+		case viewDiff:
+			m.activeView = viewConnections
+			return m, nil
+		case viewOracleSources:
+			m.activeView = viewMenu
+			return m, nil
+		case viewOracleDetail:
+			m.activeView = viewOracleSources
+			m.oracle.rebuildSortedSources()
+			return m, nil
+		case viewOracleAggregated:
+			m.activeView = viewMenu
+			return m, nil
+		case viewAggregatedDetail:
+			m.activeView = viewOracleAggregated
+			m.oracleAggregated.buildSections()
+			return m, nil
+		}
+		return m, nil
+
+	case wsConnectedMsg:
+		return m, listenForWSUpdates(m.wsCh)
+
+	case wsErrorMsg:
+		// Reconnect after a brief delay.
+		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+			return wsReconnectMsg{}
+		})
+
+	case wsReconnectMsg:
+		return m, m.api.connectWebSocket(m.wsCh)
+
+	// Oracle WS messages — update shared data and trigger view rebuilds
+	case oracleSnapshotMsg, oracleUpdateMsg:
+		updateOracleData(m.oracleData, msg)
+		var cmds []tea.Cmd
+		cmds = append(cmds, listenForWSUpdates(m.wsCh))
+		if m.activeView == viewOracleDetail {
+			m.oracleDetail.buildSections()
+		}
+		if m.activeView == viewOracleAggregated {
+			m.oracleAggregated.buildSections()
+		}
+		if m.activeView == viewOracleSources {
+			m.oracle.rebuildSortedSources()
+		}
+		return m, tea.Batch(cmds...)
+
+	case adminStateMsg:
+		if msg.state != nil {
+			m.connections.state = msg.state
+			m.connections.sortNodes()
+			m.connections.lastUpdate = time.Now()
+		}
+		return m, listenForWSUpdates(m.wsCh)
+
+	case renderTickMsg:
+		if m.isOracleView() {
+			// Re-render for relative time updates
+			return m, renderTick()
+		}
+		return m, nil
+
+	case navigateToSourceDetailMsg:
+		m.oracleDetail = newOracleDetailModel(m.oracleData, msg.sourceName)
+		m.oracleDetail.height = m.height
+		m.activeView = viewOracleDetail
+		return m, m.oracleDetail.Init()
+
+	case navigateToAggregatedDetailMsg:
+		m.oracleAggregatedDetail = newOracleAggregatedDetailModel(m.oracleData, msg.dataType, msg.key)
+		m.oracleAggregatedDetail.height = m.height
+		m.activeView = viewAggregatedDetail
+		return m, m.oracleAggregatedDetail.Init()
+
+	case navigateToDiffMsg:
+		m.diff = newDiffModel(msg.node, m.connections.state)
+		m.diff.height = m.height
+		m.activeView = viewDiff
+		return m, m.diff.Init()
 	}
-	commands["help"] = &command{
-		description: "Show help for commands",
-		usage:       "tatankactl help [command]",
-		help: `Arguments:
-  command         Command to show help for (optional)`,
-		run: runHelp,
+
+	// Delegate to active view
+	var cmd tea.Cmd
+	switch m.activeView {
+	case viewMenu:
+		m.menu, cmd = m.menu.Update(msg)
+	case viewConnections:
+		m.connections, cmd = m.connections.Update(msg)
+	case viewDiff:
+		m.diff, cmd = m.diff.Update(msg)
+	case viewOracleSources:
+		m.oracle, cmd = m.oracle.Update(msg)
+	case viewOracleDetail:
+		m.oracleDetail, cmd = m.oracleDetail.Update(msg)
+	case viewOracleAggregated:
+		m.oracleAggregated, cmd = m.oracleAggregated.Update(msg)
+	case viewAggregatedDetail:
+		m.oracleAggregatedDetail, cmd = m.oracleAggregatedDetail.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m rootModel) View() string {
+	switch m.activeView {
+	case viewMenu:
+		return m.menu.View()
+	case viewConnections:
+		return m.connections.View()
+	case viewDiff:
+		return m.diff.View()
+	case viewOracleSources:
+		return m.oracle.View()
+	case viewOracleDetail:
+		return m.oracleDetail.View()
+	case viewOracleAggregated:
+		return m.oracleAggregated.View()
+	case viewAggregatedDetail:
+		return m.oracleAggregatedDetail.View()
+	default:
+		return ""
 	}
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
-	}
+	address := flag.String("a", "localhost:12366", "Admin server address")
+	flag.StringVar(address, "address", "localhost:12366", "Admin server address")
+	flag.Parse()
 
-	cmdName := os.Args[1]
+	api := newAPIClient(*address)
+	model := newRootModel(api)
 
-	// Handle --help or -h at top level
-	if cmdName == "--help" || cmdName == "-h" {
-		printUsage()
-		os.Exit(0)
-	}
-
-	cmd, ok := commands[cmdName]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmdName)
-		printUsage()
-		os.Exit(1)
-	}
-
-	// Pass remaining args to the command
-	if err := cmd.run(os.Args[2:]); err != nil {
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-func printUsage() {
-	fmt.Println("tatankactl - Tatanka node administration tool")
-	fmt.Println()
-	fmt.Println("Usage: tatankactl <command> [options]")
-	fmt.Println()
-	fmt.Println(globalOptions)
-	fmt.Println()
-	fmt.Println("Commands:")
-	for name := range commands {
-		fmt.Printf("  %-12s %s\n", name, commands[name].description)
-	}
-	fmt.Println()
-	fmt.Println("Use \"tatankactl help <command>\" for more information about a command.")
-}
-
-func printCommandUsage(cmd *command) {
-	fmt.Println(cmd.usage)
-	fmt.Println()
-	fmt.Println(cmd.description)
-	fmt.Println()
-	fmt.Println(cmd.help)
-	fmt.Println()
-	fmt.Println(globalOptions)
-}
-
-// Common options for connection commands
-type connOptions struct {
-	Address string `short:"a" long:"address" description:"Admin server address" default:"localhost:12366"`
-}
-
-func parseConnOptions(args []string) (*connOptions, []string, error) {
-	var opts connOptions
-	parser := flags.NewParser(&opts, flags.Default&^flags.PrintErrors)
-	remaining, err := parser.ParseArgs(args)
-	if err != nil {
-		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
-			return nil, nil, err
-		}
-		return nil, nil, err
-	}
-	return &opts, remaining, nil
-}
-
-func normalizeAddress(addr string) string {
-	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
-		return "http://" + addr
-	}
-	return addr
-}
-
-// conns command
-func runConns(args []string) error {
-	opts, remaining, err := parseConnOptions(args)
-	if err != nil {
-		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
-			printCommandUsage(commands["conns"])
-			return nil
-		}
-		return err
-	}
-
-	if len(remaining) > 0 {
-		return fmt.Errorf("conns does not accept additional arguments: %v", remaining)
-	}
-
-	address := normalizeAddress(opts.Address)
-	state, err := fetchState(address)
-	if err != nil {
-		return err
-	}
-
-	printState(state)
-	return nil
-}
-
-// watchconns command
-func runWatchConns(args []string) error {
-	opts, remaining, err := parseConnOptions(args)
-	if err != nil {
-		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
-			printCommandUsage(commands["watchconns"])
-			return nil
-		}
-		return err
-	}
-
-	if len(remaining) > 0 {
-		return fmt.Errorf("watchconns does not accept additional arguments: %v", remaining)
-	}
-
-	address := normalizeAddress(opts.Address)
-	watchState(address)
-	return nil
-}
-
-// diff command
-func runDiff(args []string) error {
-	opts, remaining, err := parseConnOptions(args)
-	if err != nil {
-		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
-			printCommandUsage(commands["diff"])
-			return nil
-		}
-		return err
-	}
-
-	if len(remaining) == 0 {
-		return fmt.Errorf("diff requires a peer ID argument")
-	}
-	if len(remaining) > 1 {
-		return fmt.Errorf("diff accepts only one peer ID argument, got: %v", remaining)
-	}
-
-	peerID := remaining[0]
-	address := normalizeAddress(opts.Address)
-
-	state, err := fetchState(address)
-	if err != nil {
-		return err
-	}
-
-	return showDiff(state, peerID)
-}
-
-// help command
-func runHelp(args []string) error {
-	if len(args) == 0 {
-		printUsage()
-		return nil
-	}
-
-	if len(args) > 1 {
-		return fmt.Errorf("help accepts at most one argument")
-	}
-
-	cmdName := args[0]
-	cmd, ok := commands[cmdName]
-	if !ok {
-		return fmt.Errorf("unknown command: %s", cmdName)
-	}
-
-	printCommandUsage(cmd)
-
-	return nil
-}
-
-func fetchState(address string) (*admin.AdminState, error) {
-	resp, err := http.Get(address + "/admin/state")
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to admin server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned status %d", resp.StatusCode)
-	}
-
-	var state admin.AdminState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &state, nil
-}
-
-func watchState(address string) {
-	// Convert HTTP URL to WebSocket URL
-	wsURL, err := url.Parse(address)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid address: %v\n", err)
-		os.Exit(1)
-	}
-
-	if wsURL.Scheme == "https" {
-		wsURL.Scheme = "wss"
-	} else {
-		wsURL.Scheme = "ws"
-	}
-	wsURL.Path = "/admin/ws"
-
-	// Handle interrupt signal
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-
-	fmt.Printf("Connecting to %s...\n", wsURL.String())
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
-	fmt.Println("Connected. Watching for updates (Ctrl+C to exit)...")
-
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					fmt.Fprintf(os.Stderr, "Connection error: %v\n", err)
-				}
-				return
-			}
-
-			var state admin.AdminState
-			if err := json.Unmarshal(message, &state); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to decode message: %v\n", err)
-				continue
-			}
-
-			// Clear screen and print new state
-			fmt.Print("\033[H\033[2J")
-			fmt.Printf("Tatanka Admin - %s\n", time.Now().Format("15:04:05"))
-			fmt.Println(strings.Repeat("=", 60))
-			printState(&state)
-		}
-	}()
-
-	select {
-	case <-done:
-	case <-interrupt:
-		fmt.Println("\nDisconnecting...")
-		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-		}
-	}
-}
-
-func printState(state *admin.AdminState) {
-	nodes := make([]admin.NodeInfo, 0, len(state.Nodes))
-	for _, node := range state.Nodes {
-		nodes = append(nodes, node)
-	}
-
-	// Sort nodes by state: connected first, then whitelist_mismatch, then disconnected
-	sort.Slice(nodes, func(i, j int) bool {
-		stateOrder := map[admin.NodeConnectionState]int{
-			admin.StateConnected:         0,
-			admin.StateWhitelistMismatch: 1,
-			admin.StateDisconnected:      2,
-		}
-		return stateOrder[nodes[i].State] < stateOrder[nodes[j].State]
-	})
-
-	// Count by state
-	counts := make(map[admin.NodeConnectionState]int)
-	for _, node := range nodes {
-		counts[node.State]++
-	}
-
-	fmt.Printf("Node Connections (%d total)\n", len(nodes))
-	fmt.Printf("  Connected: %d | Whitelist Mismatch: %d | Disconnected: %d\n\n",
-		counts[admin.StateConnected], counts[admin.StateWhitelistMismatch], counts[admin.StateDisconnected])
-
-	if len(nodes) == 0 {
-		fmt.Println("  No nodes in whitelist")
-		return
-	}
-
-	for _, node := range nodes {
-		icon := getStateIcon(node.State)
-		stateStr := getStateString(node.State)
-		fmt.Printf("  %s %-20s %s\n", icon, stateStr, node.PeerID)
-
-		// Print addresses
-		if len(node.Addresses) > 0 {
-			for _, addr := range node.Addresses {
-				fmt.Printf("     │  %s\n", addr)
-			}
-		}
-
-		if node.State == admin.StateWhitelistMismatch && len(node.PeerWhitelist) > 0 {
-			fmt.Printf("     └─ Use \"tatankactl diff %s\" to see whitelist differences\n", node.PeerID[:12])
-		}
-	}
-}
-
-func showDiff(state *admin.AdminState, peerID string) error {
-	var targetNode *admin.NodeInfo
-	for id, node := range state.Nodes {
-		if strings.HasPrefix(id, peerID) {
-			nodeCopy := node
-			targetNode = &nodeCopy
-			break
-		}
-	}
-
-	if targetNode == nil {
-		return fmt.Errorf("node not found: %s", peerID)
-	}
-
-	if targetNode.State != admin.StateWhitelistMismatch {
-		return fmt.Errorf("node %s is not in whitelist mismatch state", peerID)
-	}
-
-	if len(targetNode.PeerWhitelist) == 0 {
-		return fmt.Errorf("no peer whitelist data available for %s", peerID)
-	}
-
-	ourSet := make(map[string]bool)
-	for _, id := range state.OurWhitelist {
-		ourSet[id] = true
-	}
-
-	peerSet := make(map[string]bool)
-	for _, id := range targetNode.PeerWhitelist {
-		peerSet[id] = true
-	}
-
-	var onlyInOurs, onlyInPeers, inBoth []string
-
-	for _, id := range state.OurWhitelist {
-		if peerSet[id] {
-			inBoth = append(inBoth, id)
-		} else {
-			onlyInOurs = append(onlyInOurs, id)
-		}
-	}
-
-	for _, id := range targetNode.PeerWhitelist {
-		if !ourSet[id] {
-			onlyInPeers = append(onlyInPeers, id)
-		}
-	}
-
-	fmt.Printf("Whitelist Diff for %s\n", targetNode.PeerID)
-	fmt.Println(strings.Repeat("=", 60))
-
-	if len(inBoth) > 0 {
-		fmt.Printf("\n✓ In Both Whitelists (%d):\n", len(inBoth))
-		for _, id := range inBoth {
-			fmt.Printf("  %s\n", id)
-		}
-	}
-
-	if len(onlyInOurs) > 0 {
-		fmt.Printf("\n+ Only in Our Whitelist (%d):\n", len(onlyInOurs))
-		for _, id := range onlyInOurs {
-			fmt.Printf("  %s\n", id)
-		}
-	}
-
-	if len(onlyInPeers) > 0 {
-		fmt.Printf("\n- Only in Peer's Whitelist (%d):\n", len(onlyInPeers))
-		for _, id := range onlyInPeers {
-			fmt.Printf("  %s\n", id)
-		}
-	}
-
-	fmt.Println()
-	return nil
-}
-
-func getStateIcon(state admin.NodeConnectionState) string {
-	switch state {
-	case admin.StateConnected:
-		return "🟢"
-	case admin.StateWhitelistMismatch:
-		return "🟡"
-	case admin.StateDisconnected:
-		return "🔴"
-	default:
-		return "⚪"
-	}
-}
-
-func getStateString(state admin.NodeConnectionState) string {
-	switch state {
-	case admin.StateConnected:
-		return "Connected"
-	case admin.StateWhitelistMismatch:
-		return "Whitelist Mismatch"
-	case admin.StateDisconnected:
-		return "Disconnected"
-	default:
-		return string(state)
 	}
 }

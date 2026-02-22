@@ -23,6 +23,7 @@ const (
 	coinmarketcapAPIKey = "b2def99762ca4df2b5d557ae6bf1a4a5"
 	tatumAPIKey         = ""
 	blockcypherToken    = "91ded84bd49348688d319245a62388af"
+	coingeckoAPIKey     = ""
 )
 
 func liveTestLogger() slog.Logger { return slog.Disabled }
@@ -47,6 +48,13 @@ func TestLiveMempoolDotSpaceSource(t *testing.T) {
 
 func TestLiveCoinpaprikaSource(t *testing.T) {
 	src := providers.NewCoinpaprikaSource(httpClient(), liveTestLogger())
+	testPriceSource(t, src)
+	testMinPeriod(t, src, 60*time.Second)
+	testUnlimitedQuota(t, src)
+}
+
+func TestLiveCoinGeckoSourceFree(t *testing.T) {
+	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), "")
 	testPriceSource(t, src)
 	testMinPeriod(t, src, 60*time.Second)
 	testUnlimitedQuota(t, src)
@@ -102,6 +110,16 @@ func TestLiveCoinMarketCapSource(t *testing.T) {
 	src := providers.NewCoinMarketCapSource(httpClient(), liveTestLogger(), coinmarketcapAPIKey)
 	testPriceSource(t, src)
 	testMinPeriod(t, src, 60*time.Second)
+	testPooledQuota(t, src)
+}
+
+func TestLiveCoinGeckoSourcePro(t *testing.T) {
+	if coingeckoAPIKey == "" {
+		t.Skip("coingecko API key not provided")
+	}
+	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), coingeckoAPIKey)
+	testPriceSource(t, src)
+	testMinPeriod(t, src, 30*time.Second)
 	testPooledQuota(t, src)
 }
 

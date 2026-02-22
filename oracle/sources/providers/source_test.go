@@ -218,3 +218,44 @@ func TestBlockcypherSource(t *testing.T) {
 		}
 	})
 }
+
+func TestCoinGeckoSource(t *testing.T) {
+	client := &tHTTPClient{}
+	src := providers.NewCoinGeckoSource(client, testLogger(), "")
+
+	t.Run("valid response", func(t *testing.T) {
+		body := `[
+			{"symbol":"btc","current_price":90000.50},
+			{"symbol":"eth","current_price":3100.25}
+		]`
+		client.response = newMockResponse(body)
+		result, err := src.FetchRates(context.Background())
+		if err != nil {
+			t.Fatalf("fetch failed: %v", err)
+		}
+
+		if len(result.Prices) != 2 {
+			t.Fatalf("expected 2 prices, got %d", len(result.Prices))
+		}
+
+		prices := make(map[sources.Ticker]float64)
+		for _, p := range result.Prices {
+			prices[p.Ticker] = p.Price
+		}
+
+		if prices["BTC"] != 90000.50 {
+			t.Errorf("expected BTC price 90000.50, got %f", prices["BTC"])
+		}
+
+		if prices["ETH"] != 3100.25 {
+			t.Errorf("expected ETH price 3100.25, got %f", prices["ETH"])
+		}
+	})
+
+	t.Run("quota status is unlimited", func(t *testing.T) {
+		status := src.QuotaStatus()
+		if status.FetchesRemaining != math.MaxInt64 {
+			t.Errorf("expected unlimited fetches, got %d", status.FetchesRemaining)
+		}
+	})
+}

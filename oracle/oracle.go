@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -71,6 +72,16 @@ type Config struct {
 	// BlockcypherToken is the token used to fetch data from the Blockcypher API.
 	BlockcypherToken string
 
+	// CoinGeckoKey is the API key used to fetch data from the CoinGecko API.
+	CoinGeckoKey string
+
+	// CoinGeckoPlan is the CoinGecko plan tier: "demo" or "pro".
+	CoinGeckoPlan string
+
+	// DataDir is the directory used for persistent data files (e.g. quota
+	// tracking). Required when file-based quota tracking is used.
+	DataDir string
+
 	// HTTPClient is the HTTP client used to fetch data from the sources.
 	// If nil, http.DefaultClient is used.
 	HTTPClient HTTPClient
@@ -92,6 +103,9 @@ func (cfg *Config) verify() error {
 	}
 	if cfg.NodeID == "" {
 		return fmt.Errorf("node ID is required")
+	}
+	if cfg.CoinGeckoKey != "" && cfg.CoinGeckoPlan != "demo" && cfg.CoinGeckoPlan != "pro" {
+		return fmt.Errorf("coingeckoplan must be 'demo' or 'pro' when coingeckokey is set")
 	}
 	return nil
 }
@@ -150,6 +164,12 @@ func New(cfg *Config) (*Oracle, error) {
 	if cfg.CMCKey != "" {
 		cmcSource := providers.NewCoinMarketCapSource(httpClient, cfg.Log, cfg.CMCKey)
 		allSources = append(allSources, cmcSource)
+	}
+
+	if cfg.CoinGeckoKey != "" {
+		quotaFile := filepath.Join(cfg.DataDir, "coingecko_quota.json")
+		cgSource := providers.NewCoinGeckoSource(httpClient, cfg.Log, cfg.CoinGeckoKey, cfg.CoinGeckoPlan == "pro", quotaFile)
+		allSources = append(allSources, cgSource)
 	}
 
 	if cfg.TatumKey != "" {

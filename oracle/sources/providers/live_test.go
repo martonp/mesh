@@ -6,6 +6,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,11 +54,15 @@ func TestLiveCoinpaprikaSource(t *testing.T) {
 	testUnlimitedQuota(t, src)
 }
 
-func TestLiveCoinGeckoSourceFree(t *testing.T) {
-	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), "")
+func TestLiveCoinGeckoSourceDemo(t *testing.T) {
+	if coingeckoAPIKey == "" {
+		t.Skip("coingecko API key not provided")
+	}
+	quotaFile := filepath.Join(t.TempDir(), "coingecko_quota.json")
+	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), coingeckoAPIKey, false, quotaFile)
 	testPriceSource(t, src)
-	testMinPeriod(t, src, 60*time.Second)
-	testUnlimitedQuota(t, src)
+	testMinPeriod(t, src, 30*time.Second)
+	testPooledQuota(t, src)
 }
 
 func TestLiveBitcoreBitcoinCashSource(t *testing.T) {
@@ -117,7 +122,7 @@ func TestLiveCoinGeckoSourcePro(t *testing.T) {
 	if coingeckoAPIKey == "" {
 		t.Skip("coingecko API key not provided")
 	}
-	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), coingeckoAPIKey)
+	src := providers.NewCoinGeckoSource(httpClient(), liveTestLogger(), coingeckoAPIKey, true, "")
 	testPriceSource(t, src)
 	testMinPeriod(t, src, 30*time.Second)
 	testPooledQuota(t, src)

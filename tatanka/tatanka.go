@@ -61,6 +61,8 @@ type Config struct {
 	CMCKey           string
 	TatumKey         string
 	BlockcypherToken string
+	CoinGeckoKey     string
+	CoinGeckoPlan    string
 }
 
 // Option is a functional option for configuring TatankaNode.
@@ -224,6 +226,9 @@ func (t *TatankaNode) Run(ctx context.Context) error {
 			CMCKey:           t.config.CMCKey,
 			TatumKey:         t.config.TatumKey,
 			BlockcypherToken: t.config.BlockcypherToken,
+			CoinGeckoKey:     t.config.CoinGeckoKey,
+			CoinGeckoPlan:    t.config.CoinGeckoPlan,
+			DataDir:          t.config.DataDir,
 			NodeID:           t.node.ID().String(),
 			PublishUpdate:    t.gossipSub.publishOracleUpdate,
 			OnStateUpdate: func(update *oracle.OracleSnapshot) {

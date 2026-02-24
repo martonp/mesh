@@ -32,6 +32,8 @@ type Config struct {
 	CMCKey           string `long:"cmckey" description:"coinmarketcap API key"`
 	TatumKey         string `long:"tatumkey" description:"tatum API key"`
 	BlockcypherToken string `long:"blockcyphertoken" description:"blockcypher API token"`
+	CoinGeckoKey     string `long:"coingeckokey" description:"CoinGecko API key (demo or pro)"`
+	CoinGeckoPlan    string `long:"coingeckoplan" description:"CoinGecko plan: 'demo' or 'pro' (required if coingeckokey is set)"`
 }
 
 // initLogRotator initializes the logging rotater to write logs to logFile and
@@ -110,6 +112,8 @@ func main() {
 		CMCKey:           cfg.CMCKey,
 		TatumKey:         cfg.TatumKey,
 		BlockcypherToken: cfg.BlockcypherToken,
+		CoinGeckoKey:     cfg.CoinGeckoKey,
+		CoinGeckoPlan:    cfg.CoinGeckoPlan,
 	}
 
 	// Create Tatanka node

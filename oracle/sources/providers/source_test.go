@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"github.com/decred/slog"
@@ -221,7 +222,8 @@ func TestBlockcypherSource(t *testing.T) {
 
 func TestCoinGeckoSource(t *testing.T) {
 	client := &tHTTPClient{}
-	src := providers.NewCoinGeckoSource(client, testLogger(), "")
+	quotaFile := filepath.Join(t.TempDir(), "coingecko_quota.json")
+	src := providers.NewCoinGeckoSource(client, testLogger(), "test-key", false, quotaFile)
 
 	t.Run("valid response", func(t *testing.T) {
 		body := `[
@@ -252,10 +254,14 @@ func TestCoinGeckoSource(t *testing.T) {
 		}
 	})
 
-	t.Run("quota status is unlimited", func(t *testing.T) {
+	t.Run("quota status is file tracked", func(t *testing.T) {
 		status := src.QuotaStatus()
-		if status.FetchesRemaining != math.MaxInt64 {
-			t.Errorf("expected unlimited fetches, got %d", status.FetchesRemaining)
+		if status == nil {
+			t.Fatal("expected non-nil QuotaStatus")
+		}
+		// File-tracked demo source starts with full limit minus fetches done.
+		if status.FetchesLimit != 9500 {
+			t.Errorf("expected 9500 limit, got %d", status.FetchesLimit)
 		}
 	})
 }

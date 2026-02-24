@@ -14,62 +14,73 @@ import (
 	"github.com/bisoncraft/mesh/oracle/sources/utils"
 )
 
-// NewCoinGeckoSource creates a CoinGecko price source.
-func NewCoinGeckoSource(httpClient utils.HTTPClient, log slog.Logger, apiKey string) sources.Source {
-	if apiKey == "" {
-		return newCoinGeckoFreeSource(httpClient)
-	}
-	return newCoinGeckoProSource(httpClient, log, apiKey)
-}
+const (
+	// coingeckoDemoMonthlyLimit is the known monthly call limit for the
+	// CoinGecko demo plan. Used for local quota tracking since the demo
+	// tier does not expose a /key endpoint.
+	coingeckoDemoMonthlyLimit = 9_500
+)
 
-func newCoinGeckoFreeSource(httpClient utils.HTTPClient) *utils.UnlimitedSource {
-	url := "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=250&page=1"
+// NewCoinGeckoSource creates a CoinGecko price source. An API key is required.
+// If pro is true, the pro-tier base URL and header are used with API-based
+// quota tracking via the /key endpoint. Otherwise, the demo-tier base URL is
+// used with file-based quota tracking since the /key endpoint is pro-only.
+// quotaFilePath is used only for demo tier and should be the path to a
+// persistent JSON file for tracking quota across restarts.
+func NewCoinGeckoSource(httpClient utils.HTTPClient, log slog.Logger, apiKey string, pro bool, quotaFilePath string) sources.Source {
+	var baseURL, headerName string
+	if pro {
+		baseURL = "https://pro-api.coingecko.com/api/v3"
+		headerName = "x-cg-pro-api-key"
+	} else {
+		baseURL = "https://api.coingecko.com/api/v3"
+		headerName = "x-cg-demo-api-key"
+	}
+
+	marketsURL := baseURL + "/coins/markets?vs_currency=usd&per_page=250&page=1"
+	headers := []http.Header{{headerName: []string{apiKey}}}
+
 	fetchRates := func(ctx context.Context) (*sources.RateInfo, error) {
-		resp, err := utils.DoGet(ctx, httpClient, url, nil)
+		resp, err := utils.DoGet(ctx, httpClient, marketsURL, headers)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		return coingeckoParser(resp.Body)
 	}
-	return utils.NewUnlimitedSource(utils.UnlimitedSourceConfig{
-		Name:       "coingecko",
-		MinPeriod:  60 * time.Second,
-		FetchRates: fetchRates,
-	})
-}
 
-func newCoinGeckoProSource(httpClient utils.HTTPClient, log slog.Logger, apiKey string) *utils.TrackedSource {
-	url := "https://pro-api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=250&page=1"
-	headers := []http.Header{{"x-cg-pro-api-key": []string{apiKey}}}
-	fetchRates := func(ctx context.Context) (*sources.RateInfo, error) {
-		resp, err := utils.DoGet(ctx, httpClient, url, headers)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		return coingeckoParser(resp.Body)
+	if pro {
+		fetchQuota := coingeckoProQuotaFetcher(httpClient, baseURL, headerName, apiKey)
+		tracker := utils.NewQuotaTracker(&utils.QuotaTrackerConfig{
+			Name:              "coingecko",
+			FetchQuota:        fetchQuota,
+			ReconcileInterval: 30 * time.Second,
+			Log:               log,
+		})
+		return utils.NewTrackedSource(utils.TrackedSourceConfig{
+			Name:              "coingecko",
+			MinPeriod:         30 * time.Second,
+			FetchRates:        fetchRates,
+			Tracker:           tracker,
+			CreditsPerRequest: 1,
+		})
 	}
 
-	tracker := utils.NewQuotaTracker(&utils.QuotaTrackerConfig{
-		Name:              "coingecko",
-		FetchQuota:        coingeckoQuotaFetcher(httpClient, apiKey),
-		ReconcileInterval: 30 * time.Second,
-		Log:               log,
-	})
-	return utils.NewTrackedSource(utils.TrackedSourceConfig{
+	return utils.NewFileTrackedSource(utils.FileTrackedSourceConfig{
 		Name:              "coingecko",
 		MinPeriod:         30 * time.Second,
 		FetchRates:        fetchRates,
-		Tracker:           tracker,
 		CreditsPerRequest: 1,
+		CreditsLimit:      coingeckoDemoMonthlyLimit,
+		QuotaFile:         quotaFilePath,
+		Log:               log,
 	})
 }
 
-func coingeckoQuotaFetcher(client utils.HTTPClient, apiKey string) func(ctx context.Context) (*sources.QuotaStatus, error) {
+func coingeckoProQuotaFetcher(client utils.HTTPClient, baseURL, headerName, apiKey string) func(ctx context.Context) (*sources.QuotaStatus, error) {
 	return func(ctx context.Context) (*sources.QuotaStatus, error) {
-		url := "https://pro-api.coingecko.com/api/v3/key"
-		resp, err := utils.DoGet(ctx, client, url, []http.Header{{"x-cg-pro-api-key": []string{apiKey}}})
+		url := baseURL + "/key"
+		resp, err := utils.DoGet(ctx, client, url, []http.Header{{headerName: []string{apiKey}}})
 		if err != nil {
 			return nil, fmt.Errorf("error fetching quota: %v", err)
 		}

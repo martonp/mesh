@@ -43,6 +43,10 @@ type Config struct {
 	// Public Address
 	NATMapping bool   `long:"natmapping" description:"Automatically discover the public IP and map the listen port via UPnP. For nodes behind a consumer router. Mutually exclusive with --publicip."`
 	PublicIP   string `long:"publicip" description:"Public IP address to advertise. For VPS/cloud servers or when port forwarding is configured manually. Mutually exclusive with --natmapping."`
+
+	// Bootstrap List Publishing
+	BootstrapListFile string `long:"bootstraplistfile" description:"Path to write bootstrap list JSON file for external publishing."`
+	BootstrapListPort int    `long:"bootstraplistport" description:"Port to serve the bootstrap list via HTTP at /bootstrap."`
 }
 
 // initLogRotator initializes the logging rotater to write logs to logFile and
@@ -165,19 +169,21 @@ func main() {
 
 	// Create Tatanka config
 	tatankaCfg := &tatanka.Config{
-		DataDir:          cfg.AppDataDir,
-		Logger:           log,
-		ListenPort:       cfg.ListenPort,
-		MetricsPort:      cfg.MetricsPort,
-		AdminPort:        cfg.AdminPort,
-		BootstrapAddrs:   cfg.Bootstrap,
-		WhitelistPeers:   whitelistPeers,
-		ForceWhitelist:   cfg.ForceWhitelist,
-		CMCKey:           cfg.CMCKey,
-		TatumKey:         cfg.TatumKey,
-		BlockcypherToken: cfg.BlockcypherToken,
-		NATMapping:       cfg.NATMapping,
-		PublicIP:         cfg.PublicIP,
+		DataDir:           cfg.AppDataDir,
+		Logger:            log,
+		ListenPort:        cfg.ListenPort,
+		MetricsPort:       cfg.MetricsPort,
+		AdminPort:         cfg.AdminPort,
+		BootstrapAddrs:    cfg.Bootstrap,
+		WhitelistPeers:    whitelistPeers,
+		ForceWhitelist:    cfg.ForceWhitelist,
+		CMCKey:            cfg.CMCKey,
+		TatumKey:          cfg.TatumKey,
+		BlockcypherToken:  cfg.BlockcypherToken,
+		NATMapping:        cfg.NATMapping,
+		PublicIP:          cfg.PublicIP,
+		BootstrapListFile: cfg.BootstrapListFile,
+		BootstrapListPort: cfg.BootstrapListPort,
 	}
 
 	// Create Tatanka node

@@ -79,6 +79,10 @@ type Config struct {
 	// PublicIP is the public IP address to advertise when port forwarding is
 	// configured manually.
 	PublicIP string
+
+	// Bootstrap List Publishing
+	BootstrapListFile string
+	BootstrapListPort int
 }
 
 // Option is a functional option for configuring TatankaNode.
@@ -127,6 +131,7 @@ type TatankaNode struct {
 	metricsServer           *http.Server
 	oracle                  oracleService
 	natMapper               *natMapper
+	bootstrapList           *bootstrapListPublisher
 }
 
 func initTatankaNode(dataDir string) (crypto.PrivKey, error) {
@@ -258,6 +263,7 @@ func (t *TatankaNode) Run(ctx context.Context) error {
 		t.markReady(err)
 		return err
 	}
+	t.initBootstrapList()
 
 	t.setupStreamHandlers()
 	t.setupObservability()
@@ -480,6 +486,9 @@ func (t *TatankaNode) initConnectivity() error {
 				WhitelistState: t.whitelistManager.getLocalWhitelistState(),
 			})
 			t.peerstoreCache.save()
+			if t.bootstrapList != nil {
+				t.bootstrapList.publish()
+			}
 		},
 		broadcastLocalState: func(ws *types.WhitelistState) {
 			ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
@@ -511,6 +520,22 @@ func (t *TatankaNode) initConnectivity() error {
 	})
 
 	return nil
+}
+
+// initBootstrapList creates the bootstrap list publisher when configured.
+func (t *TatankaNode) initBootstrapList() {
+	if t.config.BootstrapListFile == "" && t.config.BootstrapListPort == 0 {
+		return
+	}
+	t.bootstrapList = newBootstrapListPublisher(
+		t.log,
+		t.node,
+		func() map[peer.ID]struct{} {
+			return t.whitelistManager.getWhitelist().PeerIDs
+		},
+		t.config.BootstrapListFile,
+		t.config.BootstrapListPort,
+	)
 }
 
 // serve launches all long-running goroutines, waits for the initial connectivity
@@ -588,6 +613,14 @@ func (t *TatankaNode) serve(ctx context.Context) error {
 		}()
 	}
 
+	if t.bootstrapList != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t.bootstrapList.run(ctx)
+		}()
+	}
+
 	wg.Wait()
 
 	return t.shutdown()
@@ -604,6 +637,12 @@ func (t *TatankaNode) shutdown() error {
 
 	if t.natMapper != nil {
 		t.natMapper.close(5 * time.Second)
+	}
+
+	if t.bootstrapList != nil {
+		if err := t.bootstrapList.shutdown(shutdownCtx); err != nil {
+			return err
+		}
 	}
 
 	if err := t.node.Close(); err != nil {

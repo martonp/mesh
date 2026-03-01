@@ -43,6 +43,7 @@ create_config() {
   local listen_port=$2
   local metrics_port=$3
   local admin_port=$4
+  local bootstrap_list_port=$5
   local config_path=$node_dir/tatanka.conf
 
   cat <<EOF > $config_path
@@ -50,6 +51,7 @@ appdata=$node_dir
 listenport=$listen_port
 metricsport=$metrics_port
 adminport=$admin_port
+bootstraplistport=$bootstrap_list_port
 EOF
 
   echo $config_path
@@ -84,10 +86,11 @@ start_harness() {
   build_testclient
   build_testclient_ui
 
-  # Store peer IDs, listen ports, and admin ports for each node.
+  # Store peer IDs, listen ports, admin ports, and bootstrap list ports for each node.
   node_peer_ids=()
   node_listen_ports=()
   node_admin_ports=()
+  node_bootstrap_list_ports=()
 
   # Initialize nodes and generate private keys using tatanka init.
   for i in $(seq 1 $num_nodes); do
@@ -100,9 +103,11 @@ start_harness() {
     listen_port=$((12345 + i))
     metrics_port=$((12355 + i))
     admin_port=$((12365 + i))
+    bootstrap_list_port=$((12375 + i))
     node_listen_ports+=("$listen_port")
     node_admin_ports+=("$admin_port")
-    config_path=$(create_config $node_dir $listen_port $metrics_port $admin_port)
+    node_bootstrap_list_ports+=("$bootstrap_list_port")
+    config_path=$(create_config $node_dir $listen_port $metrics_port $admin_port $bootstrap_list_port)
   done
 
   # Write shared whitelist into each node's data dir.
@@ -175,6 +180,10 @@ start_harness() {
   fi
 
   echo "Started $num_nodes nodes and $num_clients clients in tmux session '$session_name'"
+  for i in $(seq 1 $num_nodes); do
+    bootstrap_list_port=${node_bootstrap_list_ports[$((i - 1))]}
+    echo "  node-$i bootstrap list: http://127.0.0.1:$bootstrap_list_port/bootstrap"
+  done
 }
 
 # Check if number of nodes and clients are provided

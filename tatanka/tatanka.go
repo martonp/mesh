@@ -586,6 +586,12 @@ func (t *TatankaNode) serve(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		t.runPeerIdentificationUpdates(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		t.connectionManager.run(ctx)
 	}()
 

@@ -20,9 +20,19 @@ const (
 	// per RFC 6886 recommendation).
 	natRenewalInterval = 30 * time.Minute
 
+	// natExternalIPPollInterval is how often we poll the router for a changed
+	// external IP independently of mapping renewal.
+	natExternalIPPollInterval = 5 * time.Minute
+
 	// natDiscoveryTimeout is the timeout for UPnP IGD discovery.
 	natDiscoveryTimeout = 10 * time.Second
 )
+
+type natDevice interface {
+	GetExternalIPAddress() (net.IP, error)
+	AddPortMapping(protocol igd.Protocol, internalPort, externalPort int, description string, duration time.Duration) (int, error)
+	DeletePortMapping(protocol igd.Protocol, externalPort int) error
+}
 
 // natMapper manages a UPnP IGD port mapping where the requested external port
 // equals the internal listen port, giving a stable public address across
@@ -30,7 +40,7 @@ const (
 type natMapper struct {
 	log        slog.Logger
 	listenPort int
-	device     *igd.IGD
+	device     natDevice
 	externalIP net.IP
 	mappedPort int
 	closed     bool
@@ -97,29 +107,71 @@ func (n *natMapper) publicAddr() ma.Multiaddr {
 	return addr
 }
 
-// run periodically renews the UPnP port mapping and refreshes the external IP.
-// It blocks until the context is cancelled.
+// run periodically polls the UPnP device for external IP changes and renews the
+// port mapping on its own schedule. It blocks until the context is cancelled.
 func (n *natMapper) run(ctx context.Context) {
-	ticker := time.NewTicker(natRenewalInterval)
-	defer ticker.Stop()
+	renewTicker := time.NewTicker(natRenewalInterval)
+	defer renewTicker.Stop()
+
+	externalIPTicker := time.NewTicker(natExternalIPPollInterval)
+	defer externalIPTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			n.renew()
+		case <-externalIPTicker.C:
+			n.refreshExternalIP()
+		case <-renewTicker.C:
+			n.renewMapping()
 		}
 	}
 }
 
-// renew refreshes the external IP and renews the port mapping.
+// refreshExternalIP polls the router for a changed external IP.
 //
 // The primary lifecycle guarantee is that serve() waits for all goroutines
 // (including run()) via wg.Wait() before shutdown() calls close(). The closed
 // flag is a secondary guard: we check it before and after the network I/O to
 // avoid state updates if close() ran concurrently.
-func (n *natMapper) renew() {
+func (n *natMapper) refreshExternalIP() {
+	n.mu.RLock()
+	if n.closed {
+		n.mu.RUnlock()
+		return
+	}
+	n.mu.RUnlock()
+
+	newIP, err := n.device.GetExternalIPAddress()
+	if err != nil {
+		n.log.Warnf("UPnP: failed to refresh external IP: %v", err)
+		return
+	}
+	if newIP == nil {
+		return
+	}
+
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return
+	}
+	if newIP.Equal(n.externalIP) {
+		n.mu.Unlock()
+		return
+	}
+	n.log.Infof("UPnP: external IP changed to %s", newIP)
+	n.externalIP = newIP
+	n.mu.Unlock()
+}
+
+// renewMapping renews the existing port mapping.
+//
+// The primary lifecycle guarantee is that serve() waits for all goroutines
+// (including run()) via wg.Wait() before shutdown() calls close(). The closed
+// flag is a secondary guard: we check it before and after the network I/O to
+// avoid state updates if close() ran concurrently.
+func (n *natMapper) renewMapping() {
 	n.mu.RLock()
 	if n.closed {
 		n.mu.RUnlock()
@@ -129,12 +181,6 @@ func (n *natMapper) renew() {
 	// when renewing, not the originally requested one.
 	suggestedExtPort := n.mappedPort
 	n.mu.RUnlock()
-
-	newIP, err := n.device.GetExternalIPAddress()
-	if err != nil {
-		n.log.Warnf("UPnP: failed to refresh external IP: %v", err)
-		// Still try to renew the mapping with the old IP.
-	}
 
 	newPort, err := n.device.AddPortMapping(igd.TCP, n.listenPort, suggestedExtPort, "tatanka", natMappingLifetime)
 	if err != nil {
@@ -147,18 +193,15 @@ func (n *natMapper) renew() {
 		n.mu.Unlock()
 		return
 	}
-	if newIP != nil && !newIP.Equal(n.externalIP) {
-		n.log.Infof("UPnP: external IP changed to %s", newIP)
-		n.externalIP = newIP
-	}
 	if newPort != n.mappedPort {
 		n.log.Infof("UPnP: mapped port changed to %d", newPort)
 		n.mappedPort = newPort
 	}
+	externalIP := n.externalIP
 	n.mu.Unlock()
 
 	n.log.Debugf("UPnP: renewed mapping %s:%d -> :%d",
-		n.externalIP, newPort, n.listenPort)
+		externalIP, newPort, n.listenPort)
 }
 
 // close deletes the UPnP port mapping.

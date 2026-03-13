@@ -5,6 +5,10 @@ const (
 	// Client opens stream -> writes topic string -> server ACK/closes.
 	ClientSubscribeProtocol = "/tatanka/subscribe/1.0.0"
 
+	// ClientUnsubscribeProtocol is used by a client to unsubscribe from a topic.
+	// Client opens stream -> writes topic string -> server ACK/closes.
+	ClientUnsubscribeProtocol = "/tatanka/unsubscribe/1.0.0"
+
 	// ClientSubscriptionsProtocol is used by a client to get the list of topics
 	// they are subscribed to.
 	ClientSubscriptionsProtocol = "/tatanka/subscriptions/1.0.0"
@@ -33,11 +37,14 @@ const (
 	// AvailableMeshNodesProtocol is used by a client to get a list of all
 	// tatanka nodes in the mesh that this node is connected to.
 	AvailableMeshNodesProtocol = "/tatanka/available-mesh-nodes/1.0.0"
+
+	// SearchTopicsProtocol is used by a client to search for topics in the mesh.
+	SearchTopicsProtocol = "/tatanka/search-topics/1.0.0"
 )
 
 var (
 	// PriceTopicPrefix is the prefix for price topics.
-	PriceTopicPrefix = "price."
+	PriceTopicPrefix = "price:"
 	// FeeRateTopicPrefix is the prefix for fee rate topics.
-	FeeRateTopicPrefix = "fee_rate."
+	FeeRateTopicPrefix = "fee_rate:"
 )

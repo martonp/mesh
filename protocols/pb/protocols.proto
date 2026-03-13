@@ -74,11 +74,14 @@ message PushMessage {
   bytes sender = 4;  // The peer who sent the message or performed the subscription action
 }
 
-// SubscribeRequest is sent by a client to subscribe or unsubscribe from
-// a topic.
+// SubscribeRequest is sent by a client to subscribe to topics.
 message SubscribeRequest {
-  string topic = 1;
-  bool subscribe = 2;
+  repeated string topics = 1;
+}
+
+// UnsubscribeRequest is sent by a client to unsubscribe from topics.
+message UnsubscribeRequest {
+  repeated string topics = 1;
 }
 
 // SubscriptionsResponse is sent by a tatanka node informing the client
@@ -98,6 +101,7 @@ message ClientAddrResponse {
   repeated bytes addrs = 1;  // multiaddrs serialized as bytes
 }
 
+// TODO: Delete assetID field?
 message Bond {
   uint32 assetID = 1;
   bytes bondID = 2;
@@ -169,7 +173,7 @@ message InitialSubscriptions {
 
 // Price represents a single ticker-price pair for client consumption.
 message ClientPriceUpdate {
-  double price = 1;
+  map<string, float> prices = 1;
 }
 
 // ClientFeeRateUpdate represents a network-fee rate update for client consumption.
@@ -183,4 +187,15 @@ message ClientOracleUpdate {
     ClientPriceUpdate price_update = 1;
     ClientFeeRateUpdate fee_rate_update = 2;
   }
+}
+
+// SearchTopicsRequest is sent by a client to search for topics in the mesh.
+message SearchTopicsRequest {
+  repeated string filters = 1;
+}
+
+// SearchTopicsResponse is sent by a tatanka node to a client with a list of
+// topics that match the client's query.
+message SearchTopicsResponse {
+  repeated string topics = 1;
 }

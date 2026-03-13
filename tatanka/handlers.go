@@ -2,6 +2,8 @@ package tatanka
 
 import (
 	"context"
+	"encoding/binary"
+	"math"
 	"math/big"
 	"strings"
 	"time"
@@ -15,7 +17,6 @@ import (
 	"github.com/bisoncraft/mesh/tatanka/types"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"google.golang.org/protobuf/proto"
 )
 
 const defaultTimeout = time.Second * 30
@@ -37,13 +38,10 @@ func (t *TatankaNode) handleClientPush(s network.Stream) {
 		return
 	}
 
-	changes := t.subscriptionManager.bulkSubscribe(client, initialSubs.Topics)
+	added := t.subTrie.SubscribePeer(client, initialSubs.Topics)
 
-	for _, topic := range changes.subscribed {
+	for _, topic := range added {
 		t.publishClientSubscriptionEvent(client, topic, true)
-	}
-	for _, topic := range changes.unsubscribed {
-		t.publishClientSubscriptionEvent(client, topic, false)
 	}
 
 	if err := codec.WriteLengthPrefixedMessage(s, pbResponseSuccess()); err != nil {
@@ -79,67 +77,68 @@ func (t *TatankaNode) handleClientSubscribe(s network.Stream) {
 		// TODO: client sent invalid message, remove client?
 		return
 	}
-
-	if subscribeMessage.Subscribe {
-		subscribed := t.subscriptionManager.subscribeClient(client, subscribeMessage.Topic)
-		if subscribed {
-			t.publishClientSubscriptionEvent(client, subscribeMessage.Topic, true)
-
-			// Update the subscribing client immediately if subscribing for oracle updates.
-			// Check for prefixed price or fee rate topics.
-			if strings.HasPrefix(subscribeMessage.Topic, protocols.PriceTopicPrefix) {
-				t.sendCurrentOracleUpdate(client, subscribeMessage.Topic)
-			} else if strings.HasPrefix(subscribeMessage.Topic, protocols.FeeRateTopicPrefix) {
-				t.sendCurrentOracleUpdate(client, subscribeMessage.Topic)
-			}
+	added := t.subTrie.SubscribePeer(client, subscribeMessage.Topics)
+	for _, topic := range added {
+		if strings.HasPrefix(topic, protocols.PriceTopicPrefix) || strings.HasPrefix(topic, protocols.FeeRateTopicPrefix) {
+			// We don't care about the other nodes view of fee rate and prices.
+			continue
 		}
-	} else {
-		unsubscribed := t.subscriptionManager.unsubscribeClient(client, subscribeMessage.Topic)
-		if unsubscribed {
-			t.publishClientSubscriptionEvent(client, subscribeMessage.Topic, false)
+		t.publishClientSubscriptionEvent(client, topic, true)
+	}
+
+	for _, topic := range added {
+		if strings.HasPrefix(topic, protocols.PriceTopicPrefix) {
+			t.sendCurrentOracleUpdate(client, topic)
+		} else if strings.HasPrefix(topic, protocols.FeeRateTopicPrefix) {
+			t.sendCurrentOracleUpdate(client, topic)
 		}
+	}
+
+	if err := codec.WriteLengthPrefixedMessage(s, pbResponseSuccess()); err != nil {
+		t.log.Errorf("Failed to write success response for subscribe: %v", err)
+	}
+}
+
+// handleClientUnsubscribe handles a client unsubscribe request.
+func (t *TatankaNode) handleClientUnsubscribe(s network.Stream) {
+	defer func() { _ = s.Close() }()
+
+	client := s.Conn().RemotePeer()
+	unsubMsg := &protocolsPb.UnsubscribeRequest{}
+
+	unsubscribed := t.subTrie.UnsubscribePeer(client, unsubMsg.Topics)
+	for _, topic := range unsubscribed {
+		// Skip price and fee rates topics.
+		if strings.HasPrefix(topic, protocols.PriceTopicPrefix) || strings.HasPrefix(topic, protocols.FeeRateTopicPrefix) {
+			continue
+		}
+		t.publishClientSubscriptionEvent(client, topic, false)
+	}
+	if err := codec.WriteLengthPrefixedMessage(s, pbResponseSuccess()); err != nil {
+		t.log.Errorf("Failed to write success response for unsubscribe: %v", err)
 	}
 }
 
 // sendCurrentOracleUpdate sends the current oracle state to a newly subscribed client.
 func (t *TatankaNode) sendCurrentOracleUpdate(client peer.ID, topic string) {
 	var data []byte
-	var err error
 
 	// Check for prefixed price subscription.
 	if strings.HasPrefix(topic, protocols.PriceTopicPrefix) {
 		ticker := topic[len(protocols.PriceTopicPrefix):]
 		if price, ok := t.oracle.Price(oracle.Ticker(ticker)); ok {
-			clientUpdate := &protocolsPb.ClientPriceUpdate{
-				Price: price,
-			}
-			data, err = proto.Marshal(clientUpdate)
+			data = encodeFloat64(price)
 		}
 	} else if strings.HasPrefix(topic, protocols.FeeRateTopicPrefix) {
 		// Check for prefixed fee rate subscription.
 		network := topic[len(protocols.FeeRateTopicPrefix):]
 		if feeRate, ok := t.oracle.FeeRate(oracle.Network(network)); ok {
-			clientUpdate := &protocolsPb.ClientFeeRateUpdate{
-				FeeRate: bigIntToBytes(feeRate),
-			}
-			data, err = proto.Marshal(clientUpdate)
+			data = bigIntToBytes(feeRate)
 		}
-	}
-
-	if err != nil {
-		t.log.Errorf("Failed to marshal oracle update for new subscriber: %v", err)
-		return
 	}
 
 	if data != nil {
-		pushMsg := &protocolsPb.PushMessage{
-			MessageType: protocolsPb.PushMessage_BROADCAST,
-			Topic:       topic,
-			Data:        data,
-			Sender:      []byte(t.node.ID()),
-		}
-
-		t.pushStreamManager.distribute([]peer.ID{client}, pushMsg)
+		t.pushStreamManager.send(t.nodeID, client, topic, data)
 	}
 }
 
@@ -414,65 +413,39 @@ func (t *TatankaNode) handleForwardRelay(s network.Stream) {
 	writeResponse(pbTatankaForwardRelaySuccess(respData))
 }
 
-func (t *TatankaNode) findSubscribedPriceTopics(prices map[oracle.Ticker]float64) map[string][]peer.ID {
-	candidates := make(map[string]struct{}, len(prices))
+func (t *TatankaNode) priceSubscribers(prices map[oracle.Ticker]float64) map[string][]peer.ID {
+	candidates := make([]string, 0, len(prices))
 	for ticker := range prices {
-		candidates[protocols.PriceTopicPrefix+string(ticker)] = struct{}{}
+		candidates = append(candidates, protocols.PriceTopicPrefix+string(ticker))
 	}
 
-	return t.subscriptionManager.subscribedTopics(candidates)
+	return t.subTrie.Subscribers(candidates)
 }
 
 func (t *TatankaNode) findSubscribedFeeRateTopics(feeRates map[oracle.Network]*big.Int) map[string][]peer.ID {
 
-	candidates := make(map[string]struct{}, len(feeRates))
+	candidates := make([]string, 0, len(feeRates))
 	for network := range feeRates {
-		candidates[protocols.FeeRateTopicPrefix+string(network)] = struct{}{}
+		candidates = append(candidates, protocols.FeeRateTopicPrefix+string(network))
 	}
 
-	return t.subscriptionManager.subscribedTopics(candidates)
+	return t.subTrie.Subscribers(candidates)
+}
+
+func encodeFloat64(f float64) []byte {
+	buf := make([]byte, 8)
+	// Convert float64 bits to uint64
+	bits := math.Float64bits(f)
+	binary.BigEndian.PutUint64(buf, bits)
+	return buf
 }
 
 func (t *TatankaNode) distributePriceUpdate(topic string, candidates []peer.ID, price float64) {
-	clientUpdate := &protocolsPb.ClientPriceUpdate{
-		Price: price,
-	}
-
-	data, err := proto.Marshal(clientUpdate)
-	if err != nil {
-		t.log.Errorf("Failed to marshal price update for %s: %v", topic, err)
-		return
-	}
-
-	pushMsg := &protocolsPb.PushMessage{
-		MessageType: protocolsPb.PushMessage_BROADCAST,
-		Topic:       topic,
-		Data:        data,
-		Sender:      []byte(t.node.ID()),
-	}
-
-	t.pushStreamManager.distribute(candidates, pushMsg)
+	t.pushStreamManager.broadcast(t.nodeID, candidates, topic, encodeFloat64(price))
 }
 
 func (t *TatankaNode) distributeFeeRateUpdate(topic string, candidates []peer.ID, feeRate *big.Int) {
-	clientUpdate := &protocolsPb.ClientFeeRateUpdate{
-		FeeRate: bigIntToBytes(feeRate),
-	}
-
-	data, err := proto.Marshal(clientUpdate)
-	if err != nil {
-		t.log.Errorf("Failed to marshal fee rate update for %s: %v", topic, err)
-		return
-	}
-
-	pushMsg := &protocolsPb.PushMessage{
-		MessageType: protocolsPb.PushMessage_BROADCAST,
-		Topic:       topic,
-		Data:        data,
-		Sender:      []byte(t.node.ID()),
-	}
-
-	t.pushStreamManager.distribute(candidates, pushMsg)
+	t.pushStreamManager.broadcast(t.nodeID, candidates, topic, bigIntToBytes(feeRate))
 }
 
 func (t *TatankaNode) handleOracleUpdate(senderID peer.ID, oracleUpdate *pb.NodeOracleUpdate) {
@@ -510,7 +483,7 @@ func (t *TatankaNode) distributePriceUpdates(updatedPrices map[oracle.Ticker]flo
 		return
 	}
 
-	priceSubs := t.findSubscribedPriceTopics(updatedPrices)
+	priceSubs := t.priceSubscribers(updatedPrices)
 	if len(priceSubs) == 0 {
 		return
 	}
@@ -650,9 +623,9 @@ func (t *TatankaNode) handleAvailableMeshNodes(s network.Stream) {
 
 	for pid := range whitelistPeers {
 		// Include ourselves
-		if pid == t.node.ID() {
+		if pid == t.nodeID {
 			peers = append(peers, libp2pPeerInfoToPb(peer.AddrInfo{
-				ID:    t.node.ID(),
+				ID:    t.nodeID,
 				Addrs: t.node.Addrs(),
 			}))
 			continue
@@ -675,6 +648,27 @@ func (t *TatankaNode) handleAvailableMeshNodes(s network.Stream) {
 	}
 }
 
+// handleSearchTopics handles a request from a client to get a list of all
+// topics that this tatanka node is subscribed to.
+func (t *TatankaNode) handleSearchTopics(s network.Stream) {
+	defer func() { _ = s.Close() }()
+
+	client := s.Conn().RemotePeer()
+
+	searchMsg := &protocolsPb.SearchTopicsRequest{}
+	if err := codec.ReadLengthPrefixedMessage(s, searchMsg); err != nil {
+		t.log.Debugf("Failed to read/unmarshal search topics request from client %s: %v.", client.ShortString(), err)
+		// TODO: client sent invalid message, remove client?
+		return
+	}
+
+	matches := t.subTrie.SearchTopics(searchMsg.Filters)
+
+	if err := codec.WriteLengthPrefixedMessage(s, &protocolsPb.SearchTopicsResponse{Topics: matches}); err != nil {
+		t.log.Warnf("Failed to write search topics response: %v", err)
+	}
+}
+
 // handleQuotaHeartbeat handles a quota heartbeat message from another tatanka node.
 // This is used to periodically share quota information via gossipsub.
 func (t *TatankaNode) handleQuotaHeartbeat(senderID peer.ID, heartbeat *pb.QuotaHandshake) {
@@ -684,7 +678,7 @@ func (t *TatankaNode) handleQuotaHeartbeat(senderID peer.ID, heartbeat *pb.Quota
 }
 
 func (t *TatankaNode) handleWhitelistUpdate(senderID peer.ID, ws *types.WhitelistState, timestamp int64) {
-	if senderID == t.node.ID() {
+	if senderID == t.nodeID {
 		return
 	}
 	if !t.whitelistManager.updatePeerWhitelistState(senderID, ws, timestamp) {

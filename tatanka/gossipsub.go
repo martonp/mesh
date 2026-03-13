@@ -153,16 +153,16 @@ func newGossipSub(ctx context.Context, cfg *gossipSubCfg) (*gossipSub, error) {
 	}
 
 	return &gossipSub{
-		log:                     cfg.log,
-		ps:                      ps,
-		cfg:                     cfg,
-		clientMessageTopic:      clientMessageTopic,
-		clientConnectionsTopic:  clientConnectionsTopic,
-		oracleUpdatesTopic:      oracleUpdatesTopic,
-		quotaHeartbeatTopic:     quotaHeartbeatTopic,
+		log:                    cfg.log,
+		ps:                     ps,
+		cfg:                    cfg,
+		clientMessageTopic:     clientMessageTopic,
+		clientConnectionsTopic: clientConnectionsTopic,
+		oracleUpdatesTopic:     oracleUpdatesTopic,
+		quotaHeartbeatTopic:    quotaHeartbeatTopic,
 		whitelistUpdatesTopic:  whitelistUpdatesTopic,
-		zstdEncoder:             zstdEncoder,
-		zstdDecoder:             zstdDecoder,
+		zstdEncoder:            zstdEncoder,
+		zstdDecoder:            zstdDecoder,
 	}, nil
 }
 

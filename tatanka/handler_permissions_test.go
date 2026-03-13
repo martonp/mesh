@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
-	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 	"github.com/bisoncraft/mesh/codec"
-	"github.com/bisoncraft/mesh/tatanka/types"
 	"github.com/bisoncraft/mesh/protocols"
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
+	"github.com/bisoncraft/mesh/tatanka/types"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
 // TestPushPermissions tests the permissions for the push protocol.
@@ -45,7 +46,9 @@ func TestPushPermissions(t *testing.T) {
 		t.Fatalf("Failed to connect client to node: %v", err)
 	}
 
-	time.Sleep(time.Second)
+	requireEventually(t, func() bool {
+		return mnet.Net(clientHost.ID()).Connectedness(meshHost.ID()) == network.Connected
+	}, time.Second, 5*time.Millisecond, "client failed to connect to mesh node")
 
 	// With bond score 0, push protocol should return unauthorized error
 	stream, err := clientHost.NewStream(ctx, meshHost.ID(), protocols.ClientPushProtocol)

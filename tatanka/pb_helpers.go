@@ -5,12 +5,12 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/bisoncraft/mesh/oracle"
 	"github.com/bisoncraft/mesh/oracle/sources"
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	"github.com/bisoncraft/mesh/tatanka/pb"
 	"github.com/bisoncraft/mesh/tatanka/types"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 

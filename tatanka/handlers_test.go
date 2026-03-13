@@ -3,9 +3,9 @@ package tatanka
 import (
 	"testing"
 
+	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
-	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	ma "github.com/multiformats/go-multiaddr"
 )
 

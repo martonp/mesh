@@ -46,9 +46,9 @@ type retryState struct {
 }
 
 // onSuccess resets the retry state after a successful connection.
-func (r *retryState) onSuccess() {
+func (r *retryState) onSuccess(base time.Duration) {
 	r.failures = 0
-	r.backoff = baseRetryDelay
+	r.backoff = base
 }
 
 // onFailure increments the failure count and doubles the backoff (up to max).
@@ -88,7 +88,7 @@ func (t *peerTracker) run() {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
-	retry := &retryState{backoff: baseRetryDelay}
+	retry := &retryState{backoff: t.m.retryBaseDelay}
 
 	resetTimerWithJitter := func(duration time.Duration) {
 		jitter := time.Duration(rand.Intn(int(duration / 10)))
@@ -98,12 +98,12 @@ func (t *peerTracker) run() {
 	success := func() {
 		t.m.peerStateUpdated(t.m.getPeerInfo(t.peerID))
 		t.markInitial()
-		retry.onSuccess()
+		retry.onSuccess(t.m.retryBaseDelay)
 		resetTimerWithJitter(maxRetryDelay)
 	}
 
 	forceReconnect := func() {
-		retry.onSuccess()
+		retry.onSuccess(t.m.retryBaseDelay)
 		timer.Reset(0)
 	}
 
@@ -338,10 +338,11 @@ func (t *peerTracker) verifyWhitelist() error {
 
 // meshConnectionManager manages the connections to the whitelist peers.
 type meshConnectionManager struct {
-	log       slog.Logger
-	node      host.Host
-	ctx       context.Context
-	cancelCtx context.CancelFunc
+	log            slog.Logger
+	node           host.Host
+	ctx            context.Context
+	cancelCtx      context.CancelFunc
+	retryBaseDelay time.Duration
 
 	trackersMtx  sync.RWMutex
 	peerTrackers map[peer.ID]*peerTracker
@@ -371,12 +372,20 @@ type meshConnectionManagerConfig struct {
 	getLocalWhitelistState   func() *types.WhitelistState
 	updatePeerWhitelistState func(peerID peer.ID, ws *types.WhitelistState, timestamp int64) bool
 	getPeerWhitelistState    func(peerID peer.ID) *types.WhitelistState
+	// retryBaseDelay overrides the default baseRetryDelay for testing.
+	// When zero, baseRetryDelay is used.
+	retryBaseDelay time.Duration
 }
 
 func newMeshConnectionManager(cfg *meshConnectionManagerConfig) *meshConnectionManager {
+	retryDelay := cfg.retryBaseDelay
+	if retryDelay == 0 {
+		retryDelay = baseRetryDelay
+	}
 	m := &meshConnectionManager{
 		log:                      cfg.log,
 		node:                     cfg.node,
+		retryBaseDelay:           retryDelay,
 		peerTrackers:             make(map[peer.ID]*peerTracker),
 		initialCh:                make(chan struct{}),
 		peerStateUpdated:         cfg.peerStateUpdated,

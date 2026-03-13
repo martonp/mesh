@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/bisoncraft/mesh/tatanka/pb"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
-	pb "github.com/bisoncraft/mesh/tatanka/pb"
 )
 
 func TestClientConnectionUpdateRoundTrip(t *testing.T) {

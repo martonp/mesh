@@ -35,7 +35,7 @@ type permissionDecorator func(s network.Stream) error
 
 func (t *TatankaNode) requireBonds(s network.Stream) error {
 	peerID := s.Conn().RemotePeer()
-	if peerID == t.node.ID() {
+	if peerID == t.nodeID {
 		return nil
 	}
 

@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bisoncraft/mesh/codec"
+	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/bisoncraft/mesh/codec"
-	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 )
 
 const (
@@ -105,6 +105,21 @@ func (p *pushStreamManager) newPushStream(stream network.Stream) {
 			p.mtx.Unlock()
 		}
 	}()
+}
+
+func (p *pushStreamManager) send(sender peer.ID, client peer.ID, topic string, data []byte) {
+	p.broadcast(sender, []peer.ID{client}, topic, data)
+}
+
+func (p *pushStreamManager) broadcast(sender peer.ID, clients []peer.ID, topic string, data []byte) {
+	pushMsg := &protocolsPb.PushMessage{
+		MessageType: protocolsPb.PushMessage_BROADCAST,
+		Topic:       topic,
+		Data:        data,
+		Sender:      []byte(sender),
+	}
+
+	p.distribute(clients, pushMsg)
 }
 
 // distribute distributes a message to all the clients except the sender.

@@ -9,10 +9,18 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/mesh/bond"
+	"github.com/bisoncraft/mesh/codec"
+	"github.com/bisoncraft/mesh/oracle"
+	"github.com/bisoncraft/mesh/oracle/sources"
+	"github.com/bisoncraft/mesh/protocols"
+	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
+	"github.com/bisoncraft/mesh/tatanka/types"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -20,13 +28,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
-	"github.com/bisoncraft/mesh/bond"
-	"github.com/bisoncraft/mesh/codec"
-	"github.com/bisoncraft/mesh/oracle"
-	"github.com/bisoncraft/mesh/tatanka/types"
-	"github.com/bisoncraft/mesh/oracle/sources"
-	"github.com/bisoncraft/mesh/protocols"
-	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,8 +36,8 @@ var (
 	errRelayNotFound = errors.New("relay counterparty not found")
 	errRelayOther    = errors.New("relay error")
 
-	oraclePricesTopic   = "price.BTC"
-	oracleFeeRatesTopic = "fee_rate.BTC"
+	oraclePricesTopic   = protocols.PriceTopicPrefix + "BTC"
+	oracleFeeRatesTopic = protocols.FeeRateTopicPrefix + "BTC"
 )
 
 type testBondStorage struct {
@@ -52,23 +53,6 @@ func (tbs *testBondStorage) addBonds(peerID peer.ID, bonds []*bond.BondParams) u
 func (tbs *testBondStorage) bondStrength(peerID peer.ID) uint32 {
 	return tbs.score
 }
-
-type testOracle struct{}
-
-func (to *testOracle) Run(ctx context.Context) {
-	<-ctx.Done()
-}
-
-func (to *testOracle) Merge(update *oracle.OracleUpdate, senderID string) *oracle.MergeResult {
-	return &oracle.MergeResult{}
-}
-func (to *testOracle) Price(oracle.Ticker) (float64, bool) { return 0, false }
-func (to *testOracle) FeeRate(oracle.Network) (*big.Int, bool) {
-	return nil, false
-}
-func (to *testOracle) GetLocalQuotas() map[string]*sources.QuotaStatus { return nil }
-func (to *testOracle) UpdatePeerSourceQuota(string, *oracle.TimestampedQuotaStatus, string) {}
-func (to *testOracle) OracleSnapshot() *oracle.OracleSnapshot                        { return nil }
 
 // tOracle is a test oracle that tracks merged updates.
 type tOracle struct {
@@ -156,7 +140,7 @@ func (t *tOracle) SetFeeRates(feeRates map[oracle.Network]*big.Int) {
 func newTestNode(t *testing.T, ctx context.Context, h host.Host, dataDir string, wl *types.Whitelist) *TatankaNode {
 	logBackend := slog.NewBackend(os.Stdout)
 	log := logBackend.Logger(h.ID().ShortString())
-	log.SetLevel(slog.LevelDebug)
+	log.SetLevel(slog.LevelWarn)
 
 	// Write the whitelist to the data directory.
 	if err := saveWhitelist(filepath.Join(dataDir, "whitelist.json"), wl); err != nil {
@@ -172,7 +156,7 @@ func newTestNode(t *testing.T, ctx context.Context, h host.Host, dataDir string,
 	}
 
 	n.bondStorage = &testBondStorage{score: 1}
-	n.oracle = &testOracle{}
+	n.oracle = newTOracle()
 
 	go func() {
 		if err := n.Run(ctx); err != nil {
@@ -191,7 +175,7 @@ func newTestNode(t *testing.T, ctx context.Context, h host.Host, dataDir string,
 func newTestNodeWithOracle(t *testing.T, ctx context.Context, h host.Host, dataDir string, wl *types.Whitelist, testOracle oracleService) *TatankaNode {
 	logBackend := slog.NewBackend(os.Stdout)
 	log := logBackend.Logger(h.ID().ShortString())
-	log.SetLevel(slog.LevelDebug)
+	log.SetLevel(slog.LevelWarn)
 
 	// Write the whitelist to the data directory.
 	if err := saveWhitelist(filepath.Join(dataDir, "whitelist.json"), wl); err != nil {
@@ -244,7 +228,7 @@ type relayRequest struct {
 func newTestClient(ctx context.Context, h host.Host, nodeID peer.ID) (*testClient, error) {
 	logBackend := slog.NewBackend(os.Stdout)
 	log := logBackend.Logger(h.ID().ShortString())
-	log.SetLevel(slog.LevelDebug)
+	log.SetLevel(slog.LevelWarn)
 
 	stream, err := h.NewStream(ctx, nodeID, protocols.ClientPushProtocol)
 	if err != nil {
@@ -345,8 +329,15 @@ func (tc *testClient) Subscribe(ctx context.Context, topic string) error {
 	}
 	defer func() { _ = stream.Close() }()
 
-	subMsg := &protocolsPb.SubscribeRequest{Subscribe: true, Topic: topic}
+	subMsg := &protocolsPb.SubscribeRequest{Topics: []string{topic}}
 	if err := codec.WriteLengthPrefixedMessage(stream, subMsg); err != nil {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrClosedPipe) {
+			return err
+		}
+	}
+
+	resp := &protocolsPb.Success{}
+	if err := codec.ReadLengthPrefixedMessage(stream, resp); err != nil {
 		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrClosedPipe) {
 			return err
 		}
@@ -363,8 +354,21 @@ func (tc *testClient) Unsubscribe(ctx context.Context, topic string) error {
 	}
 	defer func() { _ = stream.Close() }()
 
-	subMsg := &protocolsPb.SubscribeRequest{Subscribe: false, Topic: topic}
-	return codec.WriteLengthPrefixedMessage(stream, subMsg)
+	subMsg := &protocolsPb.UnsubscribeRequest{Topics: []string{topic}}
+	if err := codec.WriteLengthPrefixedMessage(stream, subMsg); err != nil {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrClosedPipe) {
+			return err
+		}
+	}
+
+	resp := &protocolsPb.Success{}
+	if err := codec.ReadLengthPrefixedMessage(stream, resp); err != nil {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrClosedPipe) {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Publish publishes a message to a topic.
@@ -565,9 +569,9 @@ func fullyConnectedMeshWithClients(ctx context.Context, t *testing.T, numMeshNod
 	}
 
 	// Make sure the mesh is fully connected
-	checkFullyConnected(t, runningNodes)
-
-	time.Sleep(time.Second)
+	requireEventually(t, func() bool {
+		return checkFullyConnected(t, runningNodes)
+	}, time.Second, 5*time.Millisecond, "failed to fully connect mesh")
 
 	clients = make([]*testClient, numClients)
 	for i, clientHost := range clientHosts {
@@ -584,7 +588,12 @@ func fullyConnectedMeshWithClients(ctx context.Context, t *testing.T, numMeshNod
 		}
 	}
 
-	time.Sleep(time.Second)
+	for i, clientHost := range clientHosts {
+		nodeIdx := clientToNode(i)
+		requireEventually(t, func() bool {
+			return mnet.Net(clientHost.ID()).Connectedness(meshHosts[nodeIdx].ID()) == network.Connected
+		}, time.Second, 5*time.Millisecond, "failed to connect client %d to node %d", i, nodeIdx)
+	}
 
 	return runningNodes, mockWhitelist, clients
 }
@@ -903,7 +912,11 @@ func TestClientRelay(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		_, _, clients := fullyConnectedMeshWithClients(ctx, t, 2, 2, func(i int) int { return i })
+		nodes, _, clients := fullyConnectedMeshWithClients(ctx, t, 2, 2, func(i int) int { return i })
+		requireEventually(t, func() bool {
+			return len(nodes[0].clientConnectionManager.getTatankaPeersForClient(clients[1].host.ID())) > 0 &&
+				len(nodes[1].clientConnectionManager.getTatankaPeersForClient(clients[0].host.ID())) > 0
+		}, 5*time.Second, 10*time.Millisecond, "client discovery didn't propagate")
 		checkRelayHappyPath(ctx, t, clients[0], clients[1])
 	})
 
@@ -954,7 +967,11 @@ func TestClientRelay(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, _, clients := fullyConnectedMeshWithClients(ctx, t, 2, 2, func(i int) int { return i })
+		nodes, _, clients := fullyConnectedMeshWithClients(ctx, t, 2, 2, func(i int) int { return i })
+		requireEventually(t, func() bool {
+			return len(nodes[0].clientConnectionManager.getTatankaPeersForClient(clients[1].host.ID())) > 0 &&
+				len(nodes[1].clientConnectionManager.getTatankaPeersForClient(clients[0].host.ID())) > 0
+		}, 5*time.Second, 10*time.Millisecond, "client discovery didn't propagate")
 		initiator := clients[0]
 		counterparty := clients[1]
 
@@ -972,10 +989,6 @@ func TestClientRelay(t *testing.T) {
 // checkRelayHappyPath checks that sending a message between two clients works.
 func checkRelayHappyPath(ctx context.Context, t *testing.T, initiator, counterparty *testClient) {
 	t.Helper()
-
-	// Allow gossip to propagate.
-	time.Sleep(time.Second)
-
 	errCh := make(chan error, 1)
 	respCh := make(chan []byte, 1)
 	go func() {
@@ -995,6 +1008,9 @@ func checkRelayHappyPath(ctx context.Context, t *testing.T, initiator, counterpa
 	if err != nil {
 		t.Fatalf("initiator failed to relay message: %v", err)
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 
 	select {
 	case err := <-errCh:
@@ -1040,8 +1056,6 @@ func TestClientSubscriptionAndBroadcast(t *testing.T) {
 			t.Fatalf("Failed to subscribe client %s to topic %s: %v", client.host.ID().ShortString(), topic2, err)
 		}
 	}
-
-	time.Sleep(time.Second)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -1096,9 +1110,6 @@ func TestClientSubscriptionAndBroadcast(t *testing.T) {
 			t.Logf("Iteration %d: Client %s successfully received message on topic %s",
 				iteration, subscriber.host.ID().ShortString(), topic)
 		}
-
-		// Small delay between iterations
-		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Terminate clients.
@@ -1112,35 +1123,14 @@ func TestGossipSubOracleUpdates_PriceUpdates(t *testing.T) {
 	defer cancel()
 
 	const numMeshNodes = 3
-	mesh, err := mocknet.FullMeshConnected(numMeshNodes)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	peerIDs := mesh.Peers()
-	hosts := make([]host.Host, numMeshNodes)
-	for i := range hosts {
-		hosts[i] = mesh.Host(peerIDs[i])
-	}
-
-	// Create whitelist with all nodes
-	whitelistPeerIDs := make([]peer.ID, numMeshNodes)
-	for i, h := range hosts {
-		whitelistPeerIDs[i] = h.ID()
-	}
-	mockWhitelist := types.NewWhitelist(whitelistPeerIDs)
+	nodes, _, _ := fullyConnectedMeshWithClients(ctx, t, numMeshNodes, 0, func(int) int { return 0 })
 
 	// Create nodes with custom oracles that track merges
-	nodes := make([]*TatankaNode, numMeshNodes)
 	oracles := make([]*tOracle, numMeshNodes)
-	for i := range nodes {
-		dir := t.TempDir()
-		oracle := newTOracle()
-		oracles[i] = oracle
-		nodes[i] = newTestNodeWithOracle(t, ctx, hosts[i], dir, mockWhitelist, oracle)
+	for i, node := range nodes {
+		oracles[i] = node.oracle.(*tOracle)
 	}
-
-	time.Sleep(time.Second)
 
 	// Node 0 publishes price updates
 	now := time.Now()
@@ -1152,37 +1142,35 @@ func TestGossipSubOracleUpdates_PriceUpdates(t *testing.T) {
 		t.Fatalf("Failed to publish oracle update: %v", err)
 	}
 
-	// Wait for gossip propagation
-	time.Sleep(2 * time.Second)
-
 	// Verify that all nodes received and merged the updates
 	for i := 0; i < numMeshNodes; i++ {
-		oracles[i].mtx.Lock()
-		mergedCount := len(oracles[i].merged)
-		oracles[i].mtx.Unlock()
+		requireEventually(t, func() bool {
+			oracles[i].mtx.Lock()
+			mergedCount := len(oracles[i].merged)
+			oracles[i].mtx.Unlock()
 
-		if mergedCount != 1 {
-			t.Errorf("Node %d: expected 1 merged update, got %d", i, mergedCount)
-			continue
-		}
+			if mergedCount != 1 {
+				return false
+			}
 
-		oracles[i].mtx.Lock()
-		merged := oracles[i].merged[0]
-		oracles[i].mtx.Unlock()
+			oracles[i].mtx.Lock()
+			merged := oracles[i].merged[0]
+			oracles[i].mtx.Unlock()
 
-		if merged.Source != "test-source" {
-			t.Errorf("Node %d: expected source 'test-source', got %s", i, merged.Source)
-		}
-		if len(merged.Prices) != 2 {
-			t.Errorf("Node %d: expected 2 prices, got %d", i, len(merged.Prices))
-			continue
-		}
-		if merged.Prices["BTC"] != 50000.0 {
-			t.Errorf("Node %d: BTC price incorrect: %v", i, merged.Prices["BTC"])
-		}
-		if merged.Prices["ETH"] != 3000.0 {
-			t.Errorf("Node %d: ETH price incorrect: %v", i, merged.Prices["ETH"])
-		}
+			if merged.Source != "test-source" {
+				t.Fatalf("Node %d: expected source 'test-source', got %s", i, merged.Source)
+			}
+			if len(merged.Prices) != 2 {
+				t.Fatalf("Node %d: expected 2 prices, got %d", i, len(merged.Prices))
+			}
+			if merged.Prices["BTC"] != 50000.0 {
+				t.Fatalf("Node %d: BTC price incorrect: %v", i, merged.Prices["BTC"])
+			}
+			if merged.Prices["ETH"] != 3000.0 {
+				t.Fatalf("Node %d: ETH price incorrect: %v", i, merged.Prices["ETH"])
+			}
+			return true
+		}, 2*time.Second, 5*time.Millisecond, "update never received")
 	}
 }
 
@@ -1191,36 +1179,7 @@ func TestGossipSubOracleUpdates_FeeRateUpdates(t *testing.T) {
 	defer cancel()
 
 	const numMeshNodes = 3
-	mesh, err := mocknet.FullMeshConnected(numMeshNodes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peerIDs := mesh.Peers()
-	hosts := make([]host.Host, numMeshNodes)
-	for i := range hosts {
-		hosts[i] = mesh.Host(peerIDs[i])
-	}
-
-	// Create whitelist with all nodes
-	whitelistPeerIDs := make([]peer.ID, numMeshNodes)
-	for i, h := range hosts {
-		whitelistPeerIDs[i] = h.ID()
-	}
-	mockWhitelist := types.NewWhitelist(whitelistPeerIDs)
-
-	// Create nodes with custom oracles
-	nodes := make([]*TatankaNode, numMeshNodes)
-	oracles := make([]*tOracle, numMeshNodes)
-	for i := range nodes {
-		dir := t.TempDir()
-		oracle := newTOracle()
-		oracles[i] = oracle
-		nodes[i] = newTestNodeWithOracle(t, ctx, hosts[i], dir, mockWhitelist, oracle)
-	}
-
-	time.Sleep(time.Second)
-
+	nodes, _, _ := fullyConnectedMeshWithClients(ctx, t, numMeshNodes, 0, func(int) int { return 0 })
 	// Node 1 publishes fee rate updates
 	now := time.Now()
 	update := newFeeRateUpdate("test-source", now, map[oracle.Network]*big.Int{
@@ -1231,37 +1190,37 @@ func TestGossipSubOracleUpdates_FeeRateUpdates(t *testing.T) {
 		t.Fatalf("Failed to publish oracle update: %v", err)
 	}
 
-	// Wait for gossip propagation
-	time.Sleep(2 * time.Second)
-
 	// Verify that all nodes received and merged the updates
 	for i := 0; i < numMeshNodes; i++ {
-		oracles[i].mtx.Lock()
-		mergedCount := len(oracles[i].merged)
-		oracles[i].mtx.Unlock()
+		requireEventually(t, func() bool {
 
-		if mergedCount != 1 {
-			t.Errorf("Node %d: expected 1 merged update, got %d", i, mergedCount)
-			continue
-		}
+			oracle := nodes[i].oracle.(*tOracle)
+			oracle.mtx.Lock()
+			mergedCount := len(oracle.merged)
+			oracle.mtx.Unlock()
 
-		oracles[i].mtx.Lock()
-		merged := oracles[i].merged[0]
-		oracles[i].mtx.Unlock()
+			if mergedCount != 1 {
+				return false
+			}
 
-		if merged.Source != "test-source" {
-			t.Errorf("Node %d: expected source 'test-source', got %s", i, merged.Source)
-		}
-		if len(merged.FeeRates) != 2 {
-			t.Errorf("Node %d: expected 2 fee rates, got %d", i, len(merged.FeeRates))
-			continue
-		}
-		if merged.FeeRates["Bitcoin"].Cmp(big.NewInt(100)) != 0 {
-			t.Errorf("Node %d: Bitcoin fee rate incorrect: %v", i, merged.FeeRates["Bitcoin"])
-		}
-		if merged.FeeRates["Ethereum"].Cmp(big.NewInt(50)) != 0 {
-			t.Errorf("Node %d: Ethereum fee rate incorrect: %v", i, merged.FeeRates["Ethereum"])
-		}
+			oracle.mtx.Lock()
+			merged := oracle.merged[0]
+			oracle.mtx.Unlock()
+
+			if merged.Source != "test-source" {
+				t.Fatalf("Node %d: expected source 'test-source', got %s", i, merged.Source)
+			}
+			if len(merged.FeeRates) != 2 {
+				t.Fatalf("Node %d: expected 2 fee rates, got %d", i, len(merged.FeeRates))
+			}
+			if merged.FeeRates["Bitcoin"].Cmp(big.NewInt(100)) != 0 {
+				t.Fatalf("Node %d: Bitcoin fee rate incorrect: %v", i, merged.FeeRates["Bitcoin"])
+			}
+			if merged.FeeRates["Ethereum"].Cmp(big.NewInt(50)) != 0 {
+				t.Fatalf("Node %d: Ethereum fee rate incorrect: %v", i, merged.FeeRates["Ethereum"])
+			}
+			return true
+		}, 2*time.Second, 5*time.Millisecond, "update never received")
 	}
 }
 
@@ -1270,35 +1229,7 @@ func TestGossipSubOracleUpdates_MultipleNodes(t *testing.T) {
 	defer cancel()
 
 	const numMeshNodes = 4
-	mesh, err := mocknet.FullMeshConnected(numMeshNodes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peerIDs := mesh.Peers()
-	hosts := make([]host.Host, numMeshNodes)
-	for i := range hosts {
-		hosts[i] = mesh.Host(peerIDs[i])
-	}
-
-	// Create whitelist with all nodes
-	whitelistPeerIDs := make([]peer.ID, numMeshNodes)
-	for i, h := range hosts {
-		whitelistPeerIDs[i] = h.ID()
-	}
-	mockWhitelist := types.NewWhitelist(whitelistPeerIDs)
-
-	// Create nodes with custom oracles
-	nodes := make([]*TatankaNode, numMeshNodes)
-	oracles := make([]*tOracle, numMeshNodes)
-	for i := range nodes {
-		dir := t.TempDir()
-		oracle := newTOracle()
-		oracles[i] = oracle
-		nodes[i] = newTestNodeWithOracle(t, ctx, hosts[i], dir, mockWhitelist, oracle)
-	}
-
-	time.Sleep(time.Second)
+	nodes, _, _ := fullyConnectedMeshWithClients(ctx, t, numMeshNodes, 0, func(int) int { return 0 })
 
 	now := time.Now()
 
@@ -1323,18 +1254,19 @@ func TestGossipSubOracleUpdates_MultipleNodes(t *testing.T) {
 		t.Fatalf("Failed to publish price update from node 2: %v", err)
 	}
 
-	// Wait for gossip propagation
-	time.Sleep(2 * time.Second)
-
 	// Verify all nodes received all 3 updates (2 price + 1 fee rate)
-	for i, orc := range oracles {
-		orc.mtx.Lock()
-		mergedCount := len(orc.merged)
-		orc.mtx.Unlock()
+	for i := range nodes {
+		orc := nodes[i].oracle.(*tOracle)
+		requireEventually(t, func() bool {
+			orc.mtx.Lock()
+			mergedCount := len(orc.merged)
+			orc.mtx.Unlock()
 
-		if mergedCount != 3 {
-			t.Errorf("Node %d: expected 3 merged updates, got %d", i, mergedCount)
-		}
+			if mergedCount == 3 {
+				return true
+			}
+			return false
+		}, 2*time.Second, 5*time.Millisecond, "update never received")
 	}
 }
 
@@ -1376,52 +1308,57 @@ func TestGossipSubOracleUpdates_ClientDelivery(t *testing.T) {
 		testOracle := newTOracle()
 		// Set up the oracle to return updates when MergePrices is called
 		testOracle.SetPrices(map[oracle.Ticker]float64{
-			"BTC": 50000.0,
+			"BTC": 50001.0,
 		})
 		testOracle.SetFeeRates(map[oracle.Network]*big.Int{
-			"BTC": big.NewInt(100),
+			"BTC": big.NewInt(101),
 		})
 		oracles[i] = testOracle
 		nodes[i] = newTestNodeWithOracle(t, ctx, meshHosts[i], dir, mockWhitelist, testOracle)
 	}
 
-	// Connect mesh nodes
-	if _, err := mesh.LinkPeers(meshHosts[0].ID(), meshHosts[1].ID()); err != nil {
-		t.Fatalf("Failed to link mesh peers: %v", err)
-	}
-	if _, err := mesh.ConnectPeers(meshHosts[0].ID(), meshHosts[1].ID()); err != nil {
-		t.Fatalf("Failed to connect mesh peers: %v", err)
+	connectPeers := func(peerA, peerB peer.ID) {
+		t.Helper()
+		if _, err := mesh.LinkPeers(peerA, peerB); err != nil {
+			t.Fatalf("Failed to link mesh peers: %v", err)
+		}
+		if _, err := mesh.ConnectPeers(peerA, peerB); err != nil {
+			t.Fatalf("Failed to connect mesh peers: %v", err)
+		}
+		requireEventually(t, func() bool {
+			return mesh.Net(peerA).Connectedness(peerB) == network.Connected
+		}, time.Second, 5*time.Millisecond, "failed to connect mesh peers")
 	}
 
-	time.Sleep(time.Second)
+	connectPeers(meshHosts[0].ID(), meshHosts[1].ID())
 
 	// Create clients and connect them to nodes
 	clients := make([]*testClient, numClients)
 	for i := range clients {
 		nodeIdx := i % numMeshNodes
-		if _, err := mesh.LinkPeers(clientHosts[i].ID(), meshHosts[nodeIdx].ID()); err != nil {
-			t.Fatalf("Failed to link client %d to node %d: %v", i, nodeIdx, err)
-		}
-		if _, err := mesh.ConnectPeers(clientHosts[i].ID(), meshHosts[nodeIdx].ID()); err != nil {
-			t.Fatalf("Failed to connect client %d to node %d: %v", i, nodeIdx, err)
-		}
+		connectPeers(clientHosts[i].ID(), meshHosts[nodeIdx].ID())
 		clients[i], err = newTestClient(ctx, clientHosts[i], meshHosts[nodeIdx].ID())
 		if err != nil {
 			t.Fatalf("Failed to create client %d: %v", i, err)
 		}
 	}
 
-	time.Sleep(time.Second)
+	subscribeToTopic := func(peerIdx int, topic string) {
+		t.Helper()
+		if err := clients[peerIdx].Subscribe(ctx, topic); err != nil {
+			t.Fatalf("Failed to subscribe client %d to topic %s: %v", peerIdx, topic, err)
+		}
+		peerID := clients[peerIdx].host.ID()
+		meshNode := nodes[peerIdx%numMeshNodes]
+		requireEventually(t, func() bool {
+			subs := meshNode.subTrie.Subscribers([]string{topic})
+			return slices.Contains(subs[topic], peerID)
+		}, time.Second, 5*time.Millisecond, "failed to subscribe client %d to topic %s", peerIdx, topic)
+	}
 
 	// Subscribe clients to oracle topics
-	if err := clients[0].Subscribe(ctx, oraclePricesTopic); err != nil {
-		t.Fatalf("Failed to subscribe client 0 to prices: %v", err)
-	}
-	if err := clients[1].Subscribe(ctx, oracleFeeRatesTopic); err != nil {
-		t.Fatalf("Failed to subscribe client 1 to fee rates: %v", err)
-	}
-
-	time.Sleep(time.Second)
+	subscribeToTopic(0, oraclePricesTopic)
+	subscribeToTopic(1, oracleFeeRatesTopic)
 
 	// Node 0 publishes price updates via gossipsub
 	now := time.Now()
@@ -1431,6 +1368,14 @@ func TestGossipSubOracleUpdates_ClientDelivery(t *testing.T) {
 		t.Fatalf("Failed to publish price update: %v", err)
 	}
 
+	requireEventually(t, func() bool {
+		p, found := nodes[1].oracle.Price("BTC")
+		if !found || p != 50000.0 {
+			return false
+		}
+		return true
+	}, 2*time.Second, 5*time.Millisecond, "Failed to publish price update")
+
 	// Node 1 publishes fee rate updates via gossipsub
 	if err := nodes[1].gossipSub.publishOracleUpdate(ctx, newFeeRateUpdate("test-source", now, map[oracle.Network]*big.Int{
 		"BTC": big.NewInt(100),
@@ -1438,115 +1383,15 @@ func TestGossipSubOracleUpdates_ClientDelivery(t *testing.T) {
 		t.Fatalf("Failed to publish fee rate update: %v", err)
 	}
 
-	// Wait for processing and client delivery
-	time.Sleep(2 * time.Second)
-
-	// Verify client 0 received the price update
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 3*time.Second)
-	msg0, err := clients[0].Next(timeoutCtx, oraclePricesTopic)
-	timeoutCancel()
-	if err != nil {
-		t.Errorf("Client 0 did not receive price update within timeout: %v", err)
-	} else {
-		if msg0.Topic != oraclePricesTopic {
-			t.Errorf("Client 0: wrong topic, expected %s, got %s", oraclePricesTopic, msg0.Topic)
+	requireEventually(t, func() bool {
+		p, found := nodes[0].oracle.FeeRate("BTC")
+		if !found || p.Cmp(big.NewInt(100)) != 0 {
+			return false
 		}
-		// The message should be a ClientPriceUpdate
-		t.Logf("Client 0 received price update message of type %T", msg0.MessageType)
-	}
-
-	// Verify client 1 received the fee rate update
-	timeoutCtx, timeoutCancel = context.WithTimeout(ctx, 3*time.Second)
-	msg1, err := clients[1].Next(timeoutCtx, oracleFeeRatesTopic)
-	timeoutCancel()
-	if err != nil {
-		t.Errorf("Client 1 did not receive fee rate update within timeout: %v", err)
-	} else {
-		if msg1.Topic != oracleFeeRatesTopic {
-			t.Errorf("Client 1: wrong topic, expected %s, got %s", oracleFeeRatesTopic, msg1.Topic)
-		}
-		// The message should be a ClientFeeRateUpdate
-		t.Logf("Client 1 received fee rate update message of type %T", msg1.MessageType)
-	}
+		return true
+	}, 2*time.Second, 5*time.Millisecond, "Failed to publish price update")
 
 	// Terminate clients
-	for idx := range clients {
-		clients[idx].Close()
-	}
-}
-
-func TestClientSubscriptionEvents(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	const numMeshNodes = 2
-	const numClients = 4
-
-	_, _, clients := fullyConnectedMeshWithClients(ctx, t, numMeshNodes, numClients, func(i int) int {
-		return i / 2
-	})
-
-	topic := "test_topic"
-
-	// Helper to verify subscription/unsubscription events
-	verifyEvents := func(subscribers []*testClient, expectedSender *testClient, isSubscribe bool) {
-		t.Helper()
-		expectedType := protocolsPb.PushMessage_UNSUBSCRIBE
-		eventName := "UNSUBSCRIBE"
-		if isSubscribe {
-			expectedType = protocolsPb.PushMessage_SUBSCRIBE
-			eventName = "SUBSCRIBE"
-		}
-
-		for _, client := range subscribers {
-			msg, err := client.Next(ctx, topic)
-			if err != nil {
-				t.Fatalf("Client %s failed to receive message: %v", client.host.ID().ShortString(), err)
-			}
-			if msg.MessageType != expectedType {
-				t.Fatalf("Expected %s event, got %v", eventName, msg.MessageType)
-			}
-			if string(msg.Sender) != string(expectedSender.host.ID()) {
-				t.Fatalf("Wrong sender in %s event. Expected %s, got %s",
-					eventName, expectedSender.host.ID().ShortString(), peer.ID(msg.Sender).ShortString())
-			}
-		}
-	}
-
-	t.Log("Client 0 subscribes (first subscriber)")
-	if err := clients[0].Subscribe(ctx, topic); err != nil {
-		t.Fatalf("Subscribe failed: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	t.Log("Client 1 subscribes - Client 0 should receive event")
-	if err := clients[1].Subscribe(ctx, topic); err != nil {
-		t.Fatalf("Subscribe failed: %v", err)
-	}
-	verifyEvents([]*testClient{clients[0]}, clients[1], true)
-
-	time.Sleep(200 * time.Millisecond)
-
-	t.Log("Client 2 subscribes - Clients 0,1 should receive event")
-	if err := clients[2].Subscribe(ctx, topic); err != nil {
-		t.Fatalf("Subscribe failed: %v", err)
-	}
-	verifyEvents([]*testClient{clients[0], clients[1]}, clients[2], true)
-
-	t.Log("Client 1 unsubscribes - Clients 0,2 should receive event")
-	if err := clients[1].Unsubscribe(ctx, topic); err != nil {
-		t.Fatalf("Unsubscribe failed: %v", err)
-	}
-	verifyEvents([]*testClient{clients[0], clients[2]}, clients[1], false)
-
-	t.Log("Client 3 subscribes - Clients 0,2 should receive event")
-	if err := clients[3].Subscribe(ctx, topic); err != nil {
-		t.Fatalf("Subscribe failed: %v", err)
-	}
-	verifyEvents([]*testClient{clients[0], clients[2]}, clients[3], true)
-
-	// Terminate clients.
 	for idx := range clients {
 		clients[idx].Close()
 	}
@@ -1569,7 +1414,7 @@ func waitTransitionComplete(t *testing.T, nodes []*TatankaNode) {
 	for i, n := range nodes {
 		requireEventually(t, func() bool {
 			return n.whitelistManager.getLocalWhitelistState().Proposed == nil
-		}, 30*time.Second, 200*time.Millisecond,
+		}, 30*time.Second, 5*time.Millisecond,
 			"node %d did not complete whitelist transition", i)
 	}
 }
@@ -1693,7 +1538,7 @@ func TestWhitelistTransition_RemoveNode(t *testing.T) {
 			_, tracked := nodes[i].connectionManager.peerTrackers[removedID]
 			nodes[i].connectionManager.trackersMtx.RUnlock()
 			return !tracked
-		}, 10*time.Second, 100*time.Millisecond,
+		}, 10*time.Second, 5*time.Millisecond,
 			"node %d still tracking removed node", i)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/bisoncraft/mesh/oracle/sources"
 	"github.com/bisoncraft/mesh/protocols"
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
+	"github.com/bisoncraft/mesh/subtrie"
 	"github.com/bisoncraft/mesh/tatanka/admin"
 	pb "github.com/bisoncraft/mesh/tatanka/pb"
 	"github.com/bisoncraft/mesh/tatanka/types"
@@ -88,6 +89,7 @@ type Option func(*TatankaNode)
 func WithHost(h host.Host) Option {
 	return func(n *TatankaNode) {
 		n.node = h
+		n.nodeID = h.ID()
 	}
 }
 
@@ -106,6 +108,7 @@ type oracleService interface {
 type TatankaNode struct {
 	config        *Config
 	node          host.Host
+	nodeID        peer.ID
 	log           slog.Logger
 	initWhitelist *types.Whitelist
 	readyCh       chan struct{}
@@ -118,7 +121,7 @@ type TatankaNode struct {
 	peerstoreCache          *peerstoreCache
 	gossipSub               *gossipSub
 	clientConnectionManager *clientConnectionManager
-	subscriptionManager     *subscriptionManager
+	subTrie                 *subtrie.SubTrie
 	pushStreamManager       *pushStreamManager
 	whitelistManager        *whitelistManager
 	connectionManager       *meshConnectionManager
@@ -166,7 +169,7 @@ func NewTatankaNode(config *Config, opts ...Option) (*TatankaNode, error) {
 		log:                     config.Logger,
 		privateKey:              privateKey,
 		clientConnectionManager: newClientConnectionManager(config.Logger),
-		subscriptionManager:     newSubscriptionManager(),
+		subTrie:                 subtrie.New(),
 		bondVerifier:            newBondVerifier(),
 		bondStorage:             newMemoryBondStorage(time.Now),
 		readyCh:                 make(chan struct{}),
@@ -180,7 +183,7 @@ func NewTatankaNode(config *Config, opts ...Option) (*TatankaNode, error) {
 	// otherwise from the generated private key.
 	var localPeerID peer.ID
 	if t.node != nil {
-		localPeerID = t.node.ID()
+		localPeerID = t.nodeID
 	} else {
 		localPeerID, err = peer.IDFromPrivateKey(privateKey)
 		if err != nil {
@@ -210,9 +213,9 @@ func decodePeerIDStrings(peers []string) ([]peer.ID, error) {
 }
 
 func (t *TatankaNode) handleBroadcastMessage(msg *protocolsPb.PushMessage) {
-	clients := t.subscriptionManager.clientsForTopic(msg.Topic)
-	if len(clients) > 0 {
-		t.pushStreamManager.distribute(clients, msg)
+	peers := t.subTrie.PeersForTopic(msg.Topic)
+	if len(peers) > 0 {
+		t.pushStreamManager.distribute(peers, msg)
 	}
 }
 
@@ -224,7 +227,7 @@ func (t *TatankaNode) handleClientConnectionMessage(update *clientConnectionUpda
 // connection manager and whitelist manager.
 func (t *TatankaNode) peerStates() admin.AdminState {
 	state := admin.AdminState{
-		OurPeerID:      t.node.ID().String(),
+		OurPeerID:      t.nodeID.String(),
 		WhitelistState: t.whitelistManager.getLocalWhitelistState(),
 		Peers:          make(map[string]admin.PeerInfo),
 	}
@@ -329,12 +332,16 @@ func (t *TatankaNode) initHost() error {
 
 	var err error
 	t.node, err = libp2p.New(opts...)
-	return err
+	if err != nil {
+		return err
+	}
+	t.nodeID = t.node.ID()
+	return nil
 }
 
 // initMessaging creates the gossipSub and pushStreamManager.
 func (t *TatankaNode) initMessaging(ctx context.Context) error {
-	t.log.Infof("Node ID: %s", t.node.ID().String())
+	t.log.Infof("Node ID: %s", t.nodeID.String())
 
 	listenAddrs := t.node.Network().ListenAddresses()
 	t.log.Infof("Listening on: ")
@@ -366,7 +373,7 @@ func (t *TatankaNode) initMessaging(ctx context.Context) error {
 	t.pushStreamManager = newPushStreamManager(t.config.Logger, func(client peer.ID, timestamp time.Time, connected bool) {
 		err := t.gossipSub.publishClientConnectionMessage(ctx, &clientConnectionUpdate{
 			clientID:   client,
-			reporterID: t.node.ID(),
+			reporterID: t.nodeID,
 			timestamp:  timestamp.UnixMilli(),
 			connected:  connected,
 		})
@@ -390,7 +397,7 @@ func (t *TatankaNode) initOracle() error {
 		CMCKey:           t.config.CMCKey,
 		TatumKey:         t.config.TatumKey,
 		BlockcypherToken: t.config.BlockcypherToken,
-		NodeID:           t.node.ID().String(),
+		NodeID:           t.nodeID.String(),
 		PublishUpdate:    t.gossipSub.publishOracleUpdate,
 		OnStateUpdate: func(update *oracle.OracleSnapshot) {
 			t.adminNotify.BroadcastOracleUpdate("oracle_update", update)
@@ -415,7 +422,7 @@ func (t *TatankaNode) initAdmin(ctx context.Context) error {
 	server := admin.NewServer(&admin.Config{
 		Log:    t.config.Logger,
 		Addr:   adminAddr,
-		PeerID: t.node.ID().String(),
+		PeerID: t.nodeID.String(),
 		Oracle: t.oracle,
 		GetState: func() admin.AdminState {
 			return t.peerStates()
@@ -466,7 +473,7 @@ func (t *TatankaNode) initConnectivity() error {
 	whitelistPath := filepath.Join(t.config.DataDir, whitelistFileName)
 	t.whitelistManager = newWhitelistManager(&whitelistManagerConfig{
 		log:    t.config.Logger,
-		peerID: t.node.ID(),
+		peerID: t.nodeID,
 		isConnected: func(pid peer.ID) bool {
 			return t.node.Network().Connectedness(pid) == network.Connected
 		},
@@ -671,12 +678,14 @@ func getOrCreatePrivateKey(filePath string) (crypto.PrivKey, error) {
 
 func (t *TatankaNode) setupStreamHandlers() {
 	t.setStreamHandler(protocols.PostBondsProtocol, t.handlePostBonds, requireNoPermission)
+	t.setStreamHandler(protocols.ClientSubscribeProtocol, t.handleClientSubscribe, requireNoPermission)
+	t.setStreamHandler(protocols.ClientUnsubscribeProtocol, t.handleClientUnsubscribe, requireNoPermission)
 	t.setStreamHandler(forwardRelayProtocol, t.handleForwardRelay, t.isWhitelistPeer)
-	t.setStreamHandler(protocols.ClientSubscribeProtocol, t.handleClientSubscribe, t.requireBonds)
 	t.setStreamHandler(protocols.ClientPublishProtocol, t.handleClientPublish, t.requireBonds)
 	t.setStreamHandler(protocols.ClientPushProtocol, t.handleClientPush, t.requireBonds)
 	t.setStreamHandler(protocols.ClientRelayMessageProtocol, t.handleClientRelayMessage, t.requireBonds)
 	t.setStreamHandler(protocols.AvailableMeshNodesProtocol, t.handleAvailableMeshNodes, t.requireBonds)
+	t.setStreamHandler(protocols.SearchTopicsProtocol, t.handleSearchTopics, t.requireBonds)
 	t.setStreamHandler(discoveryProtocol, t.handleDiscovery, t.isWhitelistPeer)
 	t.setStreamHandler(whitelistProtocol, t.handleWhitelist, t.isWhitelistPeer)
 	t.setStreamHandler(quotaHandshakeProtocol, t.handleQuotaHandshake, t.isWhitelistPeer)

@@ -103,7 +103,7 @@ func newTestMCM(t *testing.T, peerReplyWLState *types.WhitelistState) *testMCM {
 
 	logBackend := slog.NewBackend(os.Stdout)
 	log := logBackend.Logger("test-mcm")
-	log.SetLevel(slog.LevelDebug)
+	log.SetLevel(slog.LevelWarn)
 
 	tm.mcm = newMeshConnectionManager(&meshConnectionManagerConfig{
 		log:  log,
@@ -283,7 +283,6 @@ func TestMeshConnectionManager_Reconnect(t *testing.T) {
 	waitForPeerState(t, tm.peerStates, admin.StateConnected, 10*time.Second)
 
 	// Drain extra state events from the connect/notify cycle.
-	time.Sleep(500 * time.Millisecond)
 	for len(tm.peerStates) > 0 {
 		<-tm.peerStates
 	}

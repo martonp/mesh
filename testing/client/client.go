@@ -14,14 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decred/slog"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/cors"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/bisoncraft/mesh/bond"
 	tmc "github.com/bisoncraft/mesh/client"
 	"github.com/bisoncraft/mesh/protocols"
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
+	"github.com/decred/slog"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -61,7 +61,7 @@ func (c *Client) route() {
 	r.Post("/subscribe", c.subscribe)
 	r.Post("/unsubscribe", c.unsubscribe)
 	r.Post("/bond/add", c.addBond)
-	r.Get("/bond/post", c.postBond)
+	r.Get("/bond/postall", c.postAllBonds)
 	r.Get("/identity", c.identity)
 	r.Get("/subscriptions", c.subscriptions)
 	r.Get("/events", c.getEvents)
@@ -85,11 +85,18 @@ func NewClient(cfg *Config) (*Client, error) {
 		events: newEventStore(),
 	}
 
+	placeholderBond := &bond.BondParams{
+		ID:       "placeholder",
+		Expiry:   time.Now().Add(time.Hour * 6),
+		Strength: bond.MinRequiredBondStrength,
+	}
+
 	tcCfg := &tmc.Config{
 		Port:            cfg.ClientPort,
 		PrivateKey:      cfg.PrivateKey,
 		RemotePeerAddrs: []string(cfg.NodeAddr),
 		Logger:          cfg.Logger,
+		Bonds:           []*bond.BondParams{placeholderBond},
 	}
 
 	tc, err := tmc.NewClient(tcCfg)
@@ -210,7 +217,7 @@ func (c *Client) subscribe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), defaultTimeout)
 	defer cancel()
 
-	err = c.tatankaClient.Subscribe(ctx, payload.Topic, func(evt tmc.TopicEvent) {
+	err = c.tatankaClient.Subscribe(ctx, []string{payload.Topic}, func(_ string, evt tmc.TopicEvent) {
 		c.handleTopicEvent(payload.Topic, evt)
 	})
 	if err != nil {
@@ -267,24 +274,32 @@ func (c *Client) addBond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := []*bond.BondParams{{
+	bonds := []*bond.BondParams{{
 		ID:       payload.ID,
 		Expiry:   time.Unix(payload.Expiry, 0),
 		Strength: payload.Strength,
 	}}
 
-	c.tatankaClient.AddBond(params)
+	ctx, cancel := context.WithTimeout(r.Context(), defaultTimeout)
+	defer cancel()
+
+	err = c.tatankaClient.AddBonds(ctx, bonds)
+	if err != nil {
+		c.log.Errorf("Failed to add bond: %v", err)
+		writeErrorResponse(w, http.StatusInternalServerError, "failed to add bond")
+		return
+	}
 
 	c.log.Infof("Added bond %s with strength %d", payload.ID, payload.Strength)
 
 	writeStatusResponse(w, http.StatusOK)
 }
 
-func (c *Client) postBond(w http.ResponseWriter, r *http.Request) {
+func (c *Client) postAllBonds(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), defaultTimeout)
 	defer cancel()
 
-	err := c.tatankaClient.PostBond(ctx)
+	err := c.tatankaClient.PostAllBonds(ctx)
 	if err != nil {
 		c.log.Errorf("Failed to post bond: %v", err)
 		writeErrorResponse(w, http.StatusInternalServerError, "failed to post bond")
@@ -394,7 +409,7 @@ func writeSSEEvent(w http.ResponseWriter, e Event) error {
 	return err
 }
 
-func (c *Client) Run(ctx context.Context, bonds []*bond.BondParams) {
+func (c *Client) Run(ctx context.Context) {
 	c.log.Infof("Running test client ...")
 
 	var wg sync.WaitGroup
@@ -403,7 +418,7 @@ func (c *Client) Run(ctx context.Context, bonds []*bond.BondParams) {
 	go func() {
 		defer wg.Done()
 		c.log.Infof("Tatanka client listening on: %d", c.cfg.ClientPort)
-		err := c.tatankaClient.Run(ctx, bonds)
+		err := c.tatankaClient.Run(ctx)
 		if err != nil {
 			c.log.Errorf("Failed to run tatanka client: %v", err)
 		}
@@ -434,7 +449,7 @@ func decodeTopicData(topic string, data []byte) string {
 		ticker := topic[len(protocols.PriceTopicPrefix):]
 		var priceUpdate protocolsPb.ClientPriceUpdate
 		if err := proto.Unmarshal(data, &priceUpdate); err == nil {
-			return fmt.Sprintf("%s: $%.2f", ticker, priceUpdate.Price)
+			return fmt.Sprintf("%s: $%.2f", ticker, priceUpdate.Prices[ticker])
 		}
 	} else if strings.HasPrefix(topic, protocols.FeeRateTopicPrefix) {
 		network := topic[len(protocols.FeeRateTopicPrefix):]

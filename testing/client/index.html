@@ -1,558 +1,562 @@
 <!doctype html>
 <html>
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Tatanka test client</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet" />
-        <link href="https://fonts.googleapis.com/css2?family=Google+Sans:opsz,wght@17..18,400..700&display=swap" rel="stylesheet" />
-        <style>
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tatanka test client</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:opsz,wght@17..18,400..700&display=swap"
+        rel="stylesheet" />
+    <style>
+        body {
+            font-family: "Google Sans", sans-serif;
+            background-color: #f5f5f5;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            justify-content: center;
+            width: 100%;
+            max-width: 90vw;
+            gap: 20px;
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+
+        .container-left-wrapper {
+            flex: 3 1 250px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .container-left {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            background-color: #fff;
+        }
+
+        .container-left select,
+        .container-left input,
+        .container-left textarea,
+        .container-left button {
+            width: 100%;
+            margin-bottom: 0.5rem;
+            box-sizing: border-box;
+        }
+
+        .container-left select {
+            color: #424242;
+            font-size: 0.9rem;
+            padding-left: 0;
+            padding-right: 2rem;
+            cursor: pointer;
+            outline: none;
+            border: none;
+            border-bottom: 2px solid #888;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .container-left select,
+        .container-left input,
+        .container-left textarea {
+            padding: 0.6rem;
+        }
+
+        .container-left input::placeholder,
+        .container-left textarea::placeholder {
+            font-size: 0.8rem;
+            color: #424242;
+        }
+
+        .container-left input[type="datetime-local"] {
+            font-size: 0.8rem;
+        }
+
+        .container-left textarea {
+            resize: none;
+            font-size: 0.8rem;
+            color: #424242;
+        }
+
+        .container-error {
+            border-radius: 4px;
+            background-color: none;
+            display: none;
+        }
+
+        .container-error .error-field {
+            display: block;
+            width: 100%;
+            text-align: center;
+            color: #d32f2f;
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 0.6rem;
+            box-sizing: border-box;
+            font-size: 0.9rem;
+        }
+
+        .container-left button {
+            font-weight: 700;
+            margin-top: 0.5rem;
+            margin-bottom: 0;
+            padding: 0.75rem 1.5rem;
+            background-color: #42a5f5;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            text-transform: lowercase;
+        }
+
+        .container-right {
+            flex: 7 1 500px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 20px;
+            min-width: 0;
+            min-height: 150px;
+            height: 50vh;
+            display: flex;
+            flex-direction: column;
+            background-color: #fff;
+        }
+
+        .container-right textarea {
+            font-family: "Roboto Mono", monospace;
+            font-size: 0.75rem;
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            border: none;
+            resize: none;
+            outline: none;
+            box-sizing: border-box;
+            padding: 5px;
+            line-height: 1.4;
+        }
+
+        /* Responsive design for smaller screens */
+        @media (max-width: 768px) {
             body {
-                font-family: "Google Sans", sans-serif;
-                background-color: #f5f5f5;
-                min-height: 100vh;
-                display: flex;
-                justify-content: center;
-                align-items: center;
+                align-items: flex-start;
+                padding-top: 1rem;
+                min-height: auto;
             }
 
             .container-wrapper {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: flex-start;
-                justify-content: center;
-                width: 100%;
-                max-width: 90vw;
-                gap: 20px;
-                padding: 1rem;
-                box-sizing: border-box;
+                flex-direction: column;
+                height: auto;
+                max-width: 100%;
+                padding: 0.5rem;
+                gap: 15px;
             }
 
             .container-left-wrapper {
-                flex: 3 1 250px;
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                min-width: 0;
+                width: 100%;
+                flex: 0 0 auto;
             }
 
             .container-left {
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                padding: 20px;
-                display: flex;
-                flex-direction: column;
-                align-items: stretch;
-                justify-content: flex-start;
-                background-color: #fff;
-            }
-
-            .container-left select,
-            .container-left input,
-            .container-left textarea,
-            .container-left button {
                 width: 100%;
-                margin-bottom: 0.5rem;
-                box-sizing: border-box;
-            }
-
-            .container-left select {
-                color: #424242;
-                font-size: 0.9rem;
-                padding-left: 0;
-                padding-right: 2rem;
-                cursor: pointer;
-                outline: none;
-                border: none;
-                border-bottom: 2px solid #888;
-                font-weight: 500;
-                text-transform: uppercase;
-            }
-
-            .container-left select,
-            .container-left input,
-            .container-left textarea {
-                padding: 0.6rem;
-            }
-
-            .container-left input::placeholder,
-            .container-left textarea::placeholder {
-                font-size: 0.8rem;
-                color: #424242;
-            }
-
-            .container-left input[type="datetime-local"] {
-                font-size: 0.8rem;
-            }
-
-            .container-left textarea {
-                resize: none;
-                font-size: 0.8rem;
-                color: #424242;
-            }
-
-            .container-error {
-                border-radius: 4px;
-                background-color: none;
-                display: none;
-            }
-
-            .container-error .error-field {
-                display: block;
-                width: 100%;
-                text-align: center;
-                color: #d32f2f;
-                background-color: #e0e0e0;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                padding: 0.6rem;
-                box-sizing: border-box;
-                font-size: 0.9rem;
-            }
-
-            .container-left button {
-                font-weight: 700;
-                margin-top: 0.5rem;
-                margin-bottom: 0;
-                padding: 0.75rem 1.5rem;
-                background-color: #42a5f5;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                text-transform: lowercase;
+                padding: 15px;
             }
 
             .container-right {
-                flex: 7 1 500px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                padding: 20px;
-                min-width: 0;
-                min-height: 150px;
-                height: 50vh;
-                display: flex;
-                flex-direction: column;
-                background-color: #fff;
+                width: 100%;
+                flex: 0 0 auto;
+                height: 60vh;
+                padding: 15px;
             }
 
             .container-right textarea {
-                font-family: "Roboto Mono", monospace;
-                font-size: 0.75rem;
-                flex: 1;
-                width: 100%;
-                height: 100%;
-                border: none;
-                resize: none;
-                outline: none;
-                box-sizing: border-box;
-                padding: 5px;
-                line-height: 1.4;
+                font-size: 0.7rem;
+            }
+        }
+    </style>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const clientPort = urlParams.get("clientport");
+        let BASE_URL = "http://127.0.0.1:12465";
+        if (clientPort) {
+            BASE_URL = "http://127.0.0.1:" + clientPort;
+        }
+
+        console.log("Connecting to:", BASE_URL);
+
+        document.addEventListener("DOMContentLoaded", function () {
+            const actionSelect = document.getElementById("action");
+            const submitButton = document.getElementById("submitBtn");
+            const topicField = document.getElementById("topic");
+            const dataField = document.getElementById("data");
+            const idField = document.getElementById("id");
+            const expiryField = document.getElementById("expiry");
+            const strengthField = document.getElementById("strength");
+            const errField = document.getElementById("err");
+            const errWrapper = document.getElementById("err-wrapper");
+            const logsField = document.getElementById("logs");
+
+            function showError (message) {
+                errField.value = message;
+                errWrapper.style.display = "block";
             }
 
-            /* Responsive design for smaller screens */
-            @media (max-width: 768px) {
-                body {
-                    align-items: flex-start;
-                    padding-top: 1rem;
-                    min-height: auto;
-                }
-
-                .container-wrapper {
-                    flex-direction: column;
-                    height: auto;
-                    max-width: 100%;
-                    padding: 0.5rem;
-                    gap: 15px;
-                }
-
-                .container-left-wrapper {
-                    width: 100%;
-                    flex: 0 0 auto;
-                }
-
-                .container-left {
-                    width: 100%;
-                    padding: 15px;
-                }
-
-                .container-right {
-                    width: 100%;
-                    flex: 0 0 auto;
-                    height: 60vh;
-                    padding: 15px;
-                }
-
-                .container-right textarea {
-                    font-size: 0.7rem;
-                }
-            }
-        </style>
-        <script>
-            const urlParams = new URLSearchParams(window.location.search);
-            const clientPort = urlParams.get("clientport");
-            let BASE_URL = "http://127.0.0.1:12465";
-            if (clientPort) {
-                BASE_URL = "http://127.0.0.1:" + clientPort;
+            function clearError () {
+                errField.value = "";
+                errWrapper.style.display = "none";
             }
 
-            console.log("Connecting to:", BASE_URL);
+            // Connect to logs stream
+            const eventSource = new EventSource(BASE_URL + "/logs");
 
-            document.addEventListener("DOMContentLoaded", function () {
-                const actionSelect = document.getElementById("action");
-                const submitButton = document.getElementById("submitBtn");
-                const topicField = document.getElementById("topic");
-                const dataField = document.getElementById("data");
-                const idField = document.getElementById("id");
-                const expiryField = document.getElementById("expiry");
-                const strengthField = document.getElementById("strength");
-                const errField = document.getElementById("err");
-                const errWrapper = document.getElementById("err-wrapper");
-                const logsField = document.getElementById("logs");
+            logsField.value = "";
 
-                function showError(message) {
-                    errField.value = message;
-                    errWrapper.style.display = "block";
+            eventSource.onmessage = function (event) {
+                const value = event.data;
+
+                // Filter out ping messages
+                if (value === "ping" || value === "connected") {
+                    return;
                 }
 
-                function clearError() {
-                    errField.value = "";
-                    errWrapper.style.display = "none";
-                }
+                // Append value to logs textarea
+                logsField.value += value.trim() + "\n";
 
-                // Connect to logs stream
-                const eventSource = new EventSource(BASE_URL + "/logs");
+                // Auto-scroll to bottom
+                logsField.scrollTop = logsField.scrollHeight;
+            };
 
-                logsField.value = "";
+            eventSource.onerror = function (err) {
+                console.error("Logs stream error:", err);
+            };
 
-                eventSource.onmessage = function (event) {
-                    const value = event.data;
+            // Initialize fields as hidden since post bond is selected by default
+            topicField.style.display = "none";
+            dataField.style.display = "none";
+            idField.style.display = "none";
+            expiryField.style.display = "none";
+            strengthField.style.display = "none";
+            submitButton.textContent = "post bond";
+            errField.style.display = "block";
 
-                    // Filter out ping messages
-                    if (value === "ping" || value === "connected") {
-                        return;
-                    }
+            actionSelect.addEventListener("change", function () {
+                console.log("Selected action:", this.value);
 
-                    // Append value to logs textarea
-                    logsField.value += value.trim() + "\n";
+                clearError();
 
-                    // Auto-scroll to bottom
-                    logsField.scrollTop = logsField.scrollHeight;
-                };
+                // Reset all field values
+                topicField.value = "";
+                dataField.value = "";
+                idField.value = "";
+                expiryField.value = "";
+                strengthField.value = "";
 
-                eventSource.onerror = function (err) {
-                    console.error("Logs stream error:", err);
-                };
-
-                // Initialize fields as hidden since post bond is selected by default
-                topicField.style.display = "none";
-                dataField.style.display = "none";
-                idField.style.display = "none";
-                expiryField.style.display = "none";
-                strengthField.style.display = "none";
-                submitButton.textContent = "post bond";
-                errField.style.display = "block";
-
-                actionSelect.addEventListener("change", function () {
-                    console.log("Selected action:", this.value);
-
-                    clearError();
-
-                    // Reset all field values
-                    topicField.value = "";
-                    dataField.value = "";
-                    idField.value = "";
-                    expiryField.value = "";
-                    strengthField.value = "";
-
-                    if (this.value === "addbond") {
-                        topicField.style.display = "none";
-                        dataField.style.display = "none";
-                        idField.style.display = "block";
-                        expiryField.style.display = "block";
-                        strengthField.style.display = "block";
-                        submitButton.textContent = "add bond";
-                    } else if (this.value === "postbond") {
-                        topicField.style.display = "none";
-                        dataField.style.display = "none";
-                        idField.style.display = "none";
-                        expiryField.style.display = "none";
-                        strengthField.style.display = "none";
-                        submitButton.textContent = "post bond";
-                    } else if (this.value === "subscribe") {
-                        topicField.style.display = "block";
-                        dataField.style.display = "none";
-                        idField.style.display = "none";
-                        expiryField.style.display = "none";
-                        strengthField.style.display = "none";
-                        submitButton.textContent = "subscribe";
-                    } else if (this.value === "unsubscribe") {
-                        topicField.style.display = "block";
-                        dataField.style.display = "none";
-                        idField.style.display = "none";
-                        expiryField.style.display = "none";
-                        strengthField.style.display = "none";
-                        submitButton.textContent = "unsubscribe";
-                    } else if (this.value === "broadcast") {
-                        topicField.style.display = "block";
-                        dataField.style.display = "block";
-                        idField.style.display = "none";
-                        expiryField.style.display = "none";
-                        strengthField.style.display = "none";
-                        submitButton.textContent = "broadcast";
-                    } else {
-                        topicField.style.display = "block";
-                        dataField.style.display = "block";
-                        idField.style.display = "block";
-                        expiryField.style.display = "block";
-                        strengthField.style.display = "block";
-                        submitButton.textContent = "submit";
-                    }
-                });
-
-                // Add click handlers for each action
-                submitButton.addEventListener("click", async function (e) {
-                    e.preventDefault();
-                    const action = actionSelect.value;
-
-                    clearError();
-
-                    // Disable button during action
-                    submitButton.disabled = true;
-                    const originalText = submitButton.textContent;
-                    submitButton.textContent = "processing...";
-
-                    try {
-                        switch (action) {
-                            case "addbond":
-                                await handleAddBond();
-                                break;
-                            case "postbond":
-                                await handlePostBond();
-                                break;
-                            case "subscribe":
-                                await handleSubscribe();
-                                break;
-                            case "unsubscribe":
-                                await handleUnsubscribe();
-                                break;
-                            case "broadcast":
-                                await handleBroadcast();
-                                break;
-                            default:
-                                console.log("Unknown action:", action);
-                        }
-                    } finally {
-                        // Re-enable button after action completes
-                        submitButton.disabled = false;
-                        submitButton.textContent = originalText;
-                    }
-                });
-
-                async function handleAddBond() {
-                    // Validate fields
-                    const id = idField.value.trim();
-                    const expiry = expiryField.value;
-                    const dt = new Date(expiry);
-                    const expiryDt = dt.getTime();
-                    const strength = strengthField.value.trim();
-
-                    if (!id) {
-                        console.error("Add Bond error: id is required");
-                        showError("id is required");
-                        return;
-                    }
-
-                    if (!expiry) {
-                        console.error("Add Bond error: expiry is required");
-                        showError("expiry is required");
-                        return;
-                    }
-
-                    if (!strength) {
-                        console.error("Add Bond error: strength is required");
-                        showError("strength is required");
-                        return;
-                    }
-
-                    const strengthNum = parseFloat(strength);
-                    if (isNaN(strengthNum)) {
-                        console.error("Add Bond error: strength must be a number");
-                        showError("strength must be a number");
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch(BASE_URL + "/bond/add", {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                                id: id,
-                                expiry: expiryDt,
-                                strength: strengthNum,
-                            }),
-                        });
-
-                        if (response.ok) {
-                            console.log("Add Bond successful");
-                        } else {
-                            const data = await response.json();
-                            console.error("Add Bond error:", data.error);
-                        }
-                    } catch (err) {
-                        console.error("Add Bond error:", err.message);
-                    }
-                }
-
-                async function handlePostBond() {
-                    try {
-                        const response = await fetch(BASE_URL + "/bond/post", {
-                            method: "GET",
-                        });
-
-                        if (response.ok) {
-                            console.log("Post Bond successful");
-                        } else {
-                            const data = await response.json();
-                            console.error("Post Bond error:", data.error);
-                        }
-                    } catch (err) {
-                        console.error("Post Bond error:", err.message);
-                    }
-                }
-
-                async function handleSubscribe() {
-                    const topic = topicField.value.trim();
-
-                    if (!topic) {
-                        console.error("Subscribe error: topic is required");
-                        showError("topic is required");
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch(BASE_URL + "/subscribe", {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                                topic: topic,
-                            }),
-                        });
-
-                        if (response.ok) {
-                            console.log("Subscribe successful");
-                        } else {
-                            const data = await response.json();
-                            console.error("Subscribe error:", data.error);
-                        }
-                    } catch (err) {
-                        console.error("Subscribe error:", err.message);
-                    }
-                }
-
-                async function handleUnsubscribe() {
-                    const topic = topicField.value.trim();
-
-                    if (!topic) {
-                        console.error("Unsubscribe error: topic is required");
-                        showError("topic is required");
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch(BASE_URL + "/unsubscribe", {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                                topic: topic,
-                            }),
-                        });
-
-                        if (response.ok) {
-                            console.log("Unsubscribe successful");
-                        } else {
-                            const data = await response.json();
-                            console.error("Unsubscribe error:", data.error);
-                        }
-                    } catch (err) {
-                        console.error("Unsubscribe error:", err.message);
-                    }
-                }
-
-                async function handleBroadcast() {
-                    const topic = topicField.value.trim();
-                    const data = dataField.value.trim();
-
-                    if (!topic) {
-                        console.error("Broadcast error: topic is required");
-                        showError("topic is required");
-                        return;
-                    }
-
-                    if (!data) {
-                        console.error("Broadcast error: data is required");
-                        showError("data is required");
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch(BASE_URL + "/broadcast", {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                                topic: topic,
-                                data: data,
-                            }),
-                        });
-
-                        if (response.ok) {
-                            console.log("Broadcast successful");
-                        } else {
-                            const data = await response.json();
-                            console.error("Broadcast error:", data.error);
-                        }
-                    } catch (err) {
-                        console.error("Broadcast error:", err.message);
-                    }
+                if (this.value === "addbond") {
+                    topicField.style.display = "none";
+                    dataField.style.display = "none";
+                    idField.style.display = "block";
+                    expiryField.style.display = "block";
+                    strengthField.style.display = "block";
+                    submitButton.textContent = "add bond";
+                } else if (this.value === "postallbonds") {
+                    topicField.style.display = "none";
+                    dataField.style.display = "none";
+                    idField.style.display = "none";
+                    expiryField.style.display = "none";
+                    strengthField.style.display = "none";
+                    submitButton.textContent = "post bond";
+                } else if (this.value === "subscribe") {
+                    topicField.style.display = "block";
+                    dataField.style.display = "none";
+                    idField.style.display = "none";
+                    expiryField.style.display = "none";
+                    strengthField.style.display = "none";
+                    submitButton.textContent = "subscribe";
+                } else if (this.value === "unsubscribe") {
+                    topicField.style.display = "block";
+                    dataField.style.display = "none";
+                    idField.style.display = "none";
+                    expiryField.style.display = "none";
+                    strengthField.style.display = "none";
+                    submitButton.textContent = "unsubscribe";
+                } else if (this.value === "broadcast") {
+                    topicField.style.display = "block";
+                    dataField.style.display = "block";
+                    idField.style.display = "none";
+                    expiryField.style.display = "none";
+                    strengthField.style.display = "none";
+                    submitButton.textContent = "broadcast";
+                } else {
+                    topicField.style.display = "block";
+                    dataField.style.display = "block";
+                    idField.style.display = "block";
+                    expiryField.style.display = "block";
+                    strengthField.style.display = "block";
+                    submitButton.textContent = "submit";
                 }
             });
-        </script>
-    </head>
-    <body>
-        <div class="container-wrapper">
-            <div class="container-left-wrapper">
-                <div class="container-left">
-                    <select id="action">
-                        <option value="postbond">post bond</option>
-                        <option value="addbond">add bond</option>
-                        <option value="subscribe">subscribe</option>
-                        <option value="unsubscribe">unsubscribe</option>
-                        <option value="broadcast">broadcast</option>
-                    </select>
 
-                    <input type="text" placeholder="id" id="id" />
-                    <input type="datetime-local" id="expiry" />
-                    <input type="text" placeholder="strength" id="strength" />
-                    <input type="text" placeholder="topic" id="topic" />
-                    <textarea placeholder="data" rows="8" id="data"></textarea>
-                    <button type="submit" id="submitBtn">Post Bond</button>
-                </div>
-                <div class="container-error" id="err-wrapper">
-                    <input type="text" class="error-field" id="err" readonly />
-                </div>
+            // Add click handlers for each action
+            submitButton.addEventListener("click", async function (e) {
+                e.preventDefault();
+                const action = actionSelect.value;
+
+                clearError();
+
+                // Disable button during action
+                submitButton.disabled = true;
+                const originalText = submitButton.textContent;
+                submitButton.textContent = "processing...";
+
+                try {
+                    switch (action) {
+                        case "addbond":
+                            await handleAddBond();
+                            break;
+                        case "postallbonds":
+                            await handlePostAllBonds();
+                            break;
+                        case "subscribe":
+                            await handleSubscribe();
+                            break;
+                        case "unsubscribe":
+                            await handleUnsubscribe();
+                            break;
+                        case "broadcast":
+                            await handleBroadcast();
+                            break;
+                        default:
+                            console.log("Unknown action:", action);
+                    }
+                } finally {
+                    // Re-enable button after action completes
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalText;
+                }
+            });
+
+            async function handleAddBond () {
+                // Validate fields
+                const id = idField.value.trim();
+                const expiry = expiryField.value;
+                const dt = new Date(expiry);
+                const expiryDt = dt.getTime();
+                const strength = strengthField.value.trim();
+
+                if (!id) {
+                    console.error("Add Bond error: id is required");
+                    showError("id is required");
+                    return;
+                }
+
+                if (!expiry) {
+                    console.error("Add Bond error: expiry is required");
+                    showError("expiry is required");
+                    return;
+                }
+
+                if (!strength) {
+                    console.error("Add Bond error: strength is required");
+                    showError("strength is required");
+                    return;
+                }
+
+                const strengthNum = parseFloat(strength);
+                if (isNaN(strengthNum)) {
+                    console.error("Add Bond error: strength must be a number");
+                    showError("strength must be a number");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(BASE_URL + "/bond/add", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            id: id,
+                            expiry: expiryDt,
+                            strength: strengthNum,
+                        }),
+                    });
+
+                    if (response.ok) {
+                        console.log("Add Bond successful");
+                    } else {
+                        const data = await response.json();
+                        console.error("Add Bond error:", data.error);
+                    }
+                } catch (err) {
+                    console.error("Add Bond error:", err.message);
+                }
+            }
+
+            async function handlePostAllBonds () {
+                try {
+                    const response = await fetch(BASE_URL + "/bond/postall", {
+                        method: "GET",
+                    });
+
+                    if (response.ok) {
+                        console.log("Post Bond successful");
+                    } else {
+                        const data = await response.json();
+                        console.error("Post Bond error:", data.error);
+                    }
+                } catch (err) {
+                    console.error("Post Bond error:", err.message);
+                }
+            }
+
+            async function handleSubscribe () {
+                const topic = topicField.value.trim();
+
+                if (!topic) {
+                    console.error("Subscribe error: topic is required");
+                    showError("topic is required");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(BASE_URL + "/subscribe", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            topic: topic,
+                        }),
+                    });
+
+                    if (response.ok) {
+                        console.log("Subscribe successful");
+                    } else {
+                        const data = await response.json();
+                        console.error("Subscribe error:", data.error);
+                    }
+                } catch (err) {
+                    console.error("Subscribe error:", err.message);
+                }
+            }
+
+            async function handleUnsubscribe () {
+                const topic = topicField.value.trim();
+
+                if (!topic) {
+                    console.error("Unsubscribe error: topic is required");
+                    showError("topic is required");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(BASE_URL + "/unsubscribe", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            topic: topic,
+                        }),
+                    });
+
+                    if (response.ok) {
+                        console.log("Unsubscribe successful");
+                    } else {
+                        const data = await response.json();
+                        console.error("Unsubscribe error:", data.error);
+                    }
+                } catch (err) {
+                    console.error("Unsubscribe error:", err.message);
+                }
+            }
+
+            async function handleBroadcast () {
+                const topic = topicField.value.trim();
+                const data = dataField.value.trim();
+
+                if (!topic) {
+                    console.error("Broadcast error: topic is required");
+                    showError("topic is required");
+                    return;
+                }
+
+                if (!data) {
+                    console.error("Broadcast error: data is required");
+                    showError("data is required");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(BASE_URL + "/broadcast", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            topic: topic,
+                            data: data,
+                        }),
+                    });
+
+                    if (response.ok) {
+                        console.log("Broadcast successful");
+                    } else {
+                        const data = await response.json();
+                        console.error("Broadcast error:", data.error);
+                    }
+                } catch (err) {
+                    console.error("Broadcast error:", err.message);
+                }
+            }
+        });
+    </script>
+</head>
+
+<body>
+    <div class="container-wrapper">
+        <div class="container-left-wrapper">
+            <div class="container-left">
+                <select id="action">
+                    <option value="postallbonds">post all bonds</option>
+                    <option value="addbond">add bond</option>
+                    <option value="subscribe">subscribe</option>
+                    <option value="unsubscribe">unsubscribe</option>
+                    <option value="broadcast">broadcast</option>
+                </select>
+
+                <input type="text" placeholder="id" id="id" />
+                <input type="datetime-local" id="expiry" />
+                <input type="text" placeholder="strength" id="strength" />
+                <input type="text" placeholder="topic" id="topic" />
+                <textarea placeholder="data" rows="8" id="data"></textarea>
+                <button type="submit" id="submitBtn">Post Bond</button>
             </div>
-            <div class="container-right">
-                <textarea placeholder="Output will appear here..." id="logs" readonly> </textarea>
+            <div class="container-error" id="err-wrapper">
+                <input type="text" class="error-field" id="err" readonly />
             </div>
         </div>
-    </body>
+        <div class="container-right">
+            <textarea placeholder="Output will appear here..." id="logs" readonly> </textarea>
+        </div>
+    </div>
+</body>
+
 </html>

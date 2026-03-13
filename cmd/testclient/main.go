@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/bisoncraft/mesh/bond"
+	"github.com/bisoncraft/mesh/testing/client"
 	"github.com/decred/slog"
 	"github.com/jessevdk/go-flags"
 	"github.com/jrick/logrotate/rotator"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/bisoncraft/mesh/bond"
-	"github.com/bisoncraft/mesh/testing/client"
 )
 
 // bondParamsFlag wraps bond.BondParams to implement the flag.Value interface.
@@ -42,19 +42,18 @@ func (p *bondParamsFlag) String() string {
 
 // Config represents the configuration options for the test client.
 type Config struct {
-	AppDataDir string            `short:"A" long:"appdata" description:"Path to application home directory."`
-	ConfigFile string            `short:"C" long:"configfile" description:"Path to configuration file."`
-	LogLevel   string            `short:"l" long:"loglevel" description:"Logging level {trace, debug, info, warn, error, critical}."`
-	NodeAddr   []string          `long:"nodeaddr" description:"The addresses of the mesh nodes to connect to. Can be specified multiple times."`
-	BondParams []*bondParamsFlag `long:"bondparams" description:"The test client bond params."`
-	ClientPort int               `long:"clientport" description:"The port to listen on for client connections"`
-	WebPort    int               `long:"webport" description:"The web interface port."`
+	AppDataDir string   `short:"A" long:"appdata" description:"Path to application home directory."`
+	ConfigFile string   `short:"C" long:"configfile" description:"Path to configuration file."`
+	LogLevel   string   `short:"l" long:"loglevel" description:"Logging level {trace, debug, info, warn, error, critical}."`
+	NodeAddr   []string `long:"nodeaddr" description:"The addresses of the mesh nodes to connect to. Can be specified multiple times."`
+	ClientPort int      `long:"clientport" description:"The port to listen on for client connections"`
+	WebPort    int      `long:"webport" description:"The web interface port."`
 }
 
 // defaultAppDataDir returns the default application data directory.
 func defaultAppDataDir() string {
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".testclient")
+	return filepath.Join(homeDir, ".tatanka", ".testclient")
 }
 
 // defaultConfigFile returns the default configuration file path.
@@ -223,10 +222,5 @@ func main() {
 		cancel()
 	}()
 
-	bonds := make([]*bond.BondParams, len(cfg.BondParams))
-	for i, bp := range cfg.BondParams {
-		bonds[i] = (*bond.BondParams)(bp)
-	}
-
-	tc.Run(ctx, bonds)
+	tc.Run(ctx)
 }

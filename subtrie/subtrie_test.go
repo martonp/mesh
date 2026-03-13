@@ -70,6 +70,19 @@ func TestSubTrie_peersForTopic(t *testing.T) {
 	if len(subs3) != 0 {
 		t.Errorf("expected 0 subscribers, got %v", subs3)
 	}
+
+	// Subscribers should only return exact topic matches, not a subscribed prefix.
+	sm = New()
+	sm.SubscribePeer(peer.ID("peer1"), []string{"feed:market"})
+	sm.SubscribePeer(peer.ID("peer2"), []string{"feed:market:dcr_btc:candles"})
+
+	subsByTopic := sm.Subscribers([]string{"feed:market", "feed:market:unknown"})
+	if got := subsByTopic["feed:market"]; len(got) != 1 || got[0] != peer.ID("peer1") {
+		t.Errorf("expected only peer1 for exact topic feed:market, got %v", got)
+	}
+	if got := subsByTopic["feed:market:unknown"]; len(got) != 0 {
+		t.Errorf("expected no subscribers for non-existent exact topic, got %v", got)
+	}
 }
 
 func TestSubTrie_topicsForPeer(t *testing.T) {
@@ -143,6 +156,12 @@ func TestSubTrie_removePeer(t *testing.T) {
 	// Verify collectTopics returns empty
 	if len(sm.TopicsForPeer(peer.ID("peer1"), "feed:market")) != 0 {
 		t.Errorf("expected empty topics for peer1 after delete")
+	}
+
+	// Removing the last peer should also remove the topics from search results.
+	sm.RemovePeer(peer.ID("peer2"))
+	if topics := sm.SearchTopics([]string{"feed:market"}); len(topics) != 0 {
+		t.Errorf("expected no searchable topics after removing all peers, got %v", topics)
 	}
 }
 
@@ -237,6 +256,7 @@ func TestSubTrie_unsubscribePeer(t *testing.T) {
 func TestSubTrie_searchTopics(t *testing.T) {
 
 	test := func(name string, topics, filters, expected []string) {
+		t.Helper()
 		sm := New()
 		sm.SubscribePeer(peer.ID("peer1"), topics)
 		results := sm.SearchTopics(filters)
@@ -301,4 +321,15 @@ func TestSubTrie_searchTopics(t *testing.T) {
 	exp = []string{}
 	test("no matches", inputs, filters, exp)
 
+	inputs = append(inputs, "market:zec_btc")
+	filters = []string{
+		"market:dcr_btc",
+		"market:eth_btc",
+	}
+	exp = []string{
+		"market:dcr_btc",
+		"market:dcr_btc:candles",
+		"market:eth_btc",
+	}
+	test("partial matches", inputs, filters, exp)
 }

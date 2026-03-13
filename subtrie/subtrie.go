@@ -290,19 +290,25 @@ func (sm *SubTrie) Subscribers(topics []string) map[string][]peer.ID {
 
 	result := make(map[string][]peer.ID, len(topics))
 	for _, topic := range topics {
+		if topic == "" {
+			continue
+		}
 		parts := strings.Split(topic, ":")
 		gNode := sm.globalTrie
+		exactMatch := true
 		for _, part := range parts {
 			if gNode.children == nil {
+				exactMatch = false
 				break
 			}
 			child, exists := gNode.children[part]
 			if !exists {
+				exactMatch = false
 				break
 			}
 			gNode = child
 		}
-		if gNode.subscribers != nil {
+		if exactMatch && gNode.subscribers != nil {
 			result[topic] = slices.Collect(maps.Keys(gNode.subscribers))
 		}
 	}
@@ -321,110 +327,80 @@ func (sm *SubTrie) RemovePeer(peerID peer.ID) {
 		return
 	}
 
-	// Helper for DFS traversal to find all subscribed paths for the peer
-	var dfs func(node *topicNode, path []string)
-	dfs = func(node *topicNode, path []string) {
-		if node.isEnd {
-			// Find this path in the global topic trie to remove the peerID
-			gNode := sm.globalTrie
-			validPath := true
-			for _, part := range path {
-				if gNode.children == nil {
-					validPath = false
-					break
-				}
-				child, exists := gNode.children[part]
-				if !exists {
-					validPath = false
-					break
-				}
-				gNode = child
-			}
+	// Remove the peer from matching global trie nodes and prune empty branches.
+	var pruneGlobal func(peerNode *topicNode, globalNode *trie) bool
+	pruneGlobal = func(peerNode *topicNode, globalNode *trie) bool {
+		if peerNode.isEnd && globalNode.subscribers != nil {
+			delete(globalNode.subscribers, peerID)
+		}
 
-			// Remove the peerID if the global node exists
-			if validPath && gNode.subscribers != nil {
-				delete(gNode.subscribers, peerID)
+		for part, peerChild := range peerNode.subTopics {
+			if globalNode.children == nil {
+				continue
+			}
+			globalChild, exists := globalNode.children[part]
+			if !exists {
+				continue
+			}
+			if keepChild := pruneGlobal(peerChild, globalChild); !keepChild {
+				delete(globalNode.children, part)
 			}
 		}
 
-		// Continue traversing down the tree
-		if node.subTopics != nil {
-			for part, child := range node.subTopics {
-				// Passing the appended path for deep recursive checks
-				dfs(child, append(path, part))
-			}
-		}
+		return len(globalNode.children) > 0 || len(globalNode.subscribers) > 0
 	}
 
-	// 1. Traverse and remove the peer from the global topic trie.
-	dfs(peerTrie, nil)
+	pruneGlobal(peerTrie, sm.globalTrie)
 
-	// 2. Delete the peer from the personal tries map.
 	delete(sm.peerTries, peerID)
 }
 
 // SearchTopics takes a list of namespaced topics and returns a list of all topics
 // that are an exact match or a child of one of the topics in the input list, without duplicates.
-func (sm *SubTrie) SearchTopics(topics []string) []string {
+func (sm *SubTrie) SearchTopics(filters []string) []string {
 	sm.mtx.RLock()
 	defer sm.mtx.RUnlock()
 
-	// Grab only the root of hierarchical topics with matching non-zero root.
-	topicFilters := make([]string, 0, len(topics))
-nexttopic: // skip duplicate topics
-	for _, topic := range topics {
-		for i, filteredTopic := range topicFilters {
-			if filteredTopic == "" {
-				topicFilters = []string{""}
-				break nexttopic
-			}
-			parts, fParts := strings.Split(topic, ":"), strings.Split(filteredTopic, ":")
-			matchParts := make([]string, 0, 1)
-			for j := 0; j < len(parts) && j < len(fParts); j++ {
-				if parts[j] == fParts[j] {
-					matchParts = append(matchParts, parts[j])
-				} else {
-					break
-				}
-			}
-			if len(matchParts) > 0 {
-				// Either a duplicate or a shared root.
-				topicFilters[i] = strings.Join(matchParts, ":")
-				continue nexttopic
-			}
+	seen := make(map[string]struct{})
+	results := make([]string, 0)
+
+	add := func(topic string) {
+		if topic == "" {
+			return
 		}
-		// no matching root
-		topicFilters = append(topicFilters, topic)
+		if _, exists := seen[topic]; exists {
+			return
+		}
+		seen[topic] = struct{}{}
+		results = append(results, topic)
 	}
 
-	results := make([]string, 0, len(topics))
-
-	for _, filter := range topicFilters {
+	for _, filter := range filters {
 		if filter == "" {
 			continue
 		}
+
+		node := sm.globalTrie
 		parts := strings.Split(filter, ":")
-		root := sm.globalTrie
-		rootParts := make([]string, 0, len(parts))
+		matched := make([]string, 0, len(parts))
+
+		ok := true
 		for _, part := range parts {
-			if child, exists := root.children[part]; exists {
-				rootParts = append(rootParts, part)
-				root = child
-			} else {
+			child, exists := node.children[part]
+			if !exists {
+				ok = false
 				break
 			}
+			node = child
+			matched = append(matched, part)
 		}
-		rootTopic := strings.Join(rootParts, ":")
-		if rootTopic == "" && filter != "" {
-			// filter is not a prefix of any topic
+		if !ok {
 			continue
 		}
 
-		walkTrie(root, rootTopic, func(topic string, _ *trie) {
-			if topic == "" { // Don't include the global root
-				return
-			}
-			results = append(results, topic)
+		rootTopic := strings.Join(matched, ":")
+		walkTrie(node, rootTopic, func(topic string, _ *trie) {
+			add(topic)
 		})
 	}
 

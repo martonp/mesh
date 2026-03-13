@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bisoncraft/mesh/bond"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -21,10 +22,12 @@ const (
 
 type meshConn interface {
 	broadcast(ctx context.Context, topic string, data []byte) error
-	subscribe(ctx context.Context, topic string) error
-	unsubscribe(ctx context.Context, topic string) error
-	postBond(ctx context.Context) error
+	subscribe(ctx context.Context, topics []string) error
+	unsubscribe(ctx context.Context, topics []string) error
+	postAllBonds(ctx context.Context) error
+	addBonds(ctx context.Context, bonds []*bond.BondParams) error
 	fetchAvailableMeshNodes(ctx context.Context) ([]peer.AddrInfo, error)
+	searchTopics(ctx context.Context, filters []string) ([]string, error)
 	kill()
 	remotePeerID() peer.ID
 	run(ctx context.Context) error
@@ -53,10 +56,9 @@ type meshConnectionManager struct {
 
 // meshConnectionManagerConfig holds the configuration for creating a meshConnectionManager.
 type meshConnectionManagerConfig struct {
-	host           host.Host
-	log            slog.Logger
-	connFactory    meshConnFactory
-	bootstrapPeers []peer.AddrInfo
+	host        host.Host
+	log         slog.Logger
+	connFactory meshConnFactory
 }
 
 func newMeshConnectionManager(cfg *meshConnectionManagerConfig) *meshConnectionManager {
@@ -66,9 +68,11 @@ func newMeshConnectionManager(cfg *meshConnectionManagerConfig) *meshConnectionM
 		connFactory: cfg.connFactory,
 	}
 
-	for _, peer := range cfg.bootstrapPeers {
-		m.host.Peerstore().AddAddrs(peer.ID, peer.Addrs, peerstore.PermanentAddrTTL)
-		m.knownNodes = append(m.knownNodes, peer.ID)
+	for _, peerID := range cfg.host.Peerstore().Peers() {
+		if cfg.host.ID() == peerID {
+			continue
+		}
+		m.knownNodes = append(m.knownNodes, peerID)
 	}
 
 	return m

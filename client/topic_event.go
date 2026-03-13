@@ -19,4 +19,4 @@ type TopicEvent struct {
 }
 
 // TopicHandler is the callback signature invoked for topic events.
-type TopicHandler func(TopicEvent)
+type TopicHandler func(topic string, ev TopicEvent)

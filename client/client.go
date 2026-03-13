@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bisoncraft/mesh/bond"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/bisoncraft/mesh/bond"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/p2p/host/peerstore/pstoremem"
 
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	ma "github.com/multiformats/go-multiaddr"
@@ -19,7 +21,6 @@ import (
 
 const (
 	defaultHost = "0.0.0.0"
-	defaultPort = 7565
 )
 
 var (
@@ -35,10 +36,12 @@ var (
 
 // Config represents a tatanka client configuration.
 type Config struct {
+	Host            string
 	Port            int
 	PrivateKey      crypto.PrivKey
 	RemotePeerAddrs []string
 	Logger          slog.Logger
+	Bonds           []*bond.BondParams
 }
 
 // Client represents a tatanka client.
@@ -77,19 +80,18 @@ func NewClient(cfg *Config) (*Client, error) {
 	c := &Client{
 		cfg:           cfg,
 		topicRegistry: newTopicRegistry(),
-		bondInfo:      bond.NewBondInfo(),
 		log:           cfg.Logger,
 	}
 
-	// Add a placeholder bond to validate client. Remove once bond pipeline is fully implemented.
-	c.bondInfo.AddBonds([]*bond.BondParams{{
-		ID:       "placeholder",
-		Expiry:   time.Now().Add(time.Hour * 6),
-		Strength: bond.MinRequiredBondStrength}},
-		time.Now())
+	bi := bond.NewBondInfo()
+	bi.AddBonds(cfg.Bonds, time.Now())
+	c.bondInfo = bi
 
-	if c.cfg.Port == 0 {
-		c.cfg.Port = defaultPort
+	// Add a placeholder bond to validate client. Remove once bond pipeline is fully implemented.
+	c.bondInfo.AddBonds([]*bond.BondParams{}, time.Now())
+
+	if c.cfg.Host == "" {
+		c.cfg.Host = defaultHost
 	}
 
 	return c, nil
@@ -126,9 +128,14 @@ func (c *Client) Topics() []string {
 }
 
 // Subscribe subscribes the client to the provided topic.
-func (c *Client) Subscribe(ctx context.Context, topic string, handlerFunc TopicHandler) error {
-	if topic == "" {
-		return errEmptyTopic
+func (c *Client) Subscribe(ctx context.Context, topics []string, handlerFunc TopicHandler) error {
+	if len(topics) == 0 {
+		return errors.New("no topics provided")
+	}
+	for _, topic := range topics {
+		if topic == "" {
+			return errEmptyTopic
+		}
 	}
 
 	if handlerFunc == nil {
@@ -140,15 +147,19 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handlerFunc TopicH
 		return err
 	}
 
-	if !c.topicRegistry.register(topic, handlerFunc) {
-		return ErrRedundantSubscription
+	for _, topic := range topics {
+		if !c.topicRegistry.register(topic, handlerFunc) {
+			return ErrRedundantSubscription
+		}
 	}
 
-	err = mc.subscribe(ctx, topic)
+	err = mc.subscribe(ctx, topics)
 	if err != nil {
 		// Unregister the topic if subscription fails.
-		if !c.topicRegistry.unregister(topic) {
-			c.log.Warnf("Failed to unregister topic %s", topic)
+		for _, topic := range topics {
+			if !c.topicRegistry.unregister(topic) {
+				c.log.Warnf("Failed to unregister topic %s", topic)
+			}
 		}
 
 		return err
@@ -178,7 +189,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string) error {
 		return ErrRedundantUnsubscription
 	}
 
-	err = mc.unsubscribe(ctx, topic)
+	err = mc.unsubscribe(ctx, []string{topic})
 	if err != nil {
 		// Re-register the topic if unsubscription fails.
 		if !c.topicRegistry.register(topic, topicHandler) {
@@ -217,26 +228,46 @@ func (c *Client) handlePushMessage(msg *protocolsPb.PushMessage) {
 		return
 	}
 
-	handlerFunc(event)
+	handlerFunc(msg.Topic, event)
 }
 
-// PostBond posts the client's bond.
-func (c *Client) PostBond(ctx context.Context) error {
+// PostAllBonds posts the client's bonds.
+func (c *Client) PostAllBonds(ctx context.Context) error {
 	mc, err := c.primaryMeshConnection()
 	if err != nil {
 		return err
 	}
-	return mc.postBond(ctx)
+	return mc.postAllBonds(ctx)
 }
 
-// AddBond adds the provided bond parameters to the client.
-func (c *Client) AddBond(params []*bond.BondParams) {
-	c.bondInfo.AddBonds(params, time.Now())
+// AddBonds adds the provided bond parameters to the client.
+func (c *Client) AddBonds(ctx context.Context, bonds []*bond.BondParams) error {
+	mc, err := c.primaryMeshConnection()
+	if err != nil {
+		return err
+	}
+
+	// Client and *meshConnection share a *BondInfo. The bond will be added to the
+	// *BondInfo by *meshConnection.
+	return mc.addBonds(ctx, bonds)
 }
 
-// parseBootstrapAddrs parses a list of multiaddr strings into peer.AddrInfo.
+// SearchTopics searches for topics on mesh. Topics names are hierarchical, of
+// the form <level1>:<level2>:...:<levelN>. You can request all the subtopics
+// of a level by specifying just the level name. For example, if you have topics
+// "a:b:c" and "a:b:d", and you search for "a:b", you will get both "a:b:c" and
+// "a:b:d".
+func (c *Client) SearchTopics(ctx context.Context, filters []string) ([]string, error) {
+	mc, err := c.primaryMeshConnection()
+	if err != nil {
+		return nil, err
+	}
+	return mc.searchTopics(ctx, filters)
+}
+
+// newPeerStore parses a list of multiaddr strings into a peerstore.
 // Multiple addresses for the same peer ID are combined into a single AddrInfo.
-func parseBootstrapAddrs(addrs []string) ([]peer.AddrInfo, error) {
+func newPeerStore(addrs []string) (peerstore.Peerstore, error) {
 	peerMap := make(map[peer.ID]*peer.AddrInfo)
 
 	for _, addrStr := range addrs {
@@ -256,32 +287,35 @@ func parseBootstrapAddrs(addrs []string) ([]peer.AddrInfo, error) {
 		}
 	}
 
-	result := make([]peer.AddrInfo, 0, len(peerMap))
-	for _, info := range peerMap {
-		result = append(result, *info)
+	ps, err := pstoremem.NewPeerstore()
+	if err != nil {
+		return nil, fmt.Errorf("NewPeerstore error: %v", err)
 	}
-	return result, nil
+
+	for _, info := range peerMap {
+		ps.AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
+	}
+	return ps, nil
 }
 
 // Run starts the mesh client.
-func (c *Client) Run(ctx context.Context, bonds []*bond.BondParams) error {
-	listenAddr := fmt.Sprintf("/ip4/%s/tcp/%d", defaultHost, c.cfg.Port)
+func (c *Client) Run(ctx context.Context) error {
+	listenAddr := fmt.Sprintf("/ip4/%s/tcp/%d", c.cfg.Host, c.cfg.Port)
 
 	if c.cfg.PrivateKey == nil {
 		return fmt.Errorf("no private key provided for client")
 	}
 
-	var err error
-	c.host, err = libp2p.New(libp2p.ListenAddrStrings(listenAddr), libp2p.Identity(c.cfg.PrivateKey))
+	ps, err := newPeerStore(c.cfg.RemotePeerAddrs)
+	if err != nil {
+		return fmt.Errorf("failed to create peerstore: %w", err)
+	}
+
+	c.host, err = libp2p.New(libp2p.ListenAddrStrings(listenAddr), libp2p.Identity(c.cfg.PrivateKey), libp2p.Peerstore(ps))
 	if err != nil {
 		return fmt.Errorf("failed to create host: %w", err)
 	}
 	defer func() { _ = c.host.Close() }()
-
-	bootstrapPeers, err := parseBootstrapAddrs(c.cfg.RemotePeerAddrs)
-	if err != nil {
-		return err
-	}
 
 	// Set default connection factory if not already set (tests may override).
 	if c.connFactory == nil {
@@ -292,13 +326,10 @@ func (c *Client) Run(ctx context.Context, bonds []*bond.BondParams) error {
 
 	// Create the connection manager.
 	c.connManager = newMeshConnectionManager(&meshConnectionManagerConfig{
-		host:           c.host,
-		log:            c.log,
-		connFactory:    c.connFactory,
-		bootstrapPeers: bootstrapPeers,
+		host:        c.host,
+		log:         c.log,
+		connFactory: c.connFactory,
 	})
-
-	c.bondInfo.AddBonds(bonds, time.Now())
 
 	c.connManager.run(ctx)
 

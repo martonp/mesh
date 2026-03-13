@@ -12,7 +12,7 @@ func TestTopicRegistry(t *testing.T) {
 	pingTopic := "ping"
 
 	pingHandlerSignals := make(chan struct{}, 1)
-	pingHandler := func(_ TopicEvent) {
+	pingHandler := func(_ string, ev TopicEvent) {
 		pingHandlerSignals <- struct{}{}
 	}
 
@@ -32,7 +32,7 @@ func TestTopicRegistry(t *testing.T) {
 		t.Fatalf("Unexpected error fetching topic handler: %v", err)
 	}
 
-	handleFunc(TopicEvent{})
+	handleFunc(pingTopic, TopicEvent{})
 
 	select {
 	case <-pingHandlerSignals:

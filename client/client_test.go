@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bisoncraft/mesh/bond"
+	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p/core/peer"
-	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
 )
 
 type relayMessageParams struct {
@@ -38,10 +39,10 @@ type tMeshConnection struct {
 	broadcastCalls []broadcastParams
 	broadcastErr   error
 
-	subscribeCalls []string
+	subscribeCalls [][]string
 	subscribeErr   error
 
-	unsubscribeCalls []string
+	unsubscribeCalls [][]string
 	unsubscribeErr   error
 
 	postBondCalls []struct{}
@@ -82,28 +83,36 @@ func (m *tMeshConnection) broadcast(ctx context.Context, topic string, data []by
 	return m.broadcastErr
 }
 
-func (m *tMeshConnection) subscribe(ctx context.Context, topic string) error {
+func (m *tMeshConnection) subscribe(ctx context.Context, topics []string) error {
 	m.mu.Lock()
-	m.subscribeCalls = append(m.subscribeCalls, topic)
+	m.subscribeCalls = append(m.subscribeCalls, topics)
 	m.mu.Unlock()
 
 	return m.subscribeErr
 }
 
-func (m *tMeshConnection) unsubscribe(ctx context.Context, topic string) error {
+func (m *tMeshConnection) unsubscribe(ctx context.Context, topics []string) error {
 	m.mu.Lock()
-	m.unsubscribeCalls = append(m.unsubscribeCalls, topic)
+	m.unsubscribeCalls = append(m.unsubscribeCalls, topics)
 	m.mu.Unlock()
 
 	return m.unsubscribeErr
 }
 
-func (m *tMeshConnection) postBond(ctx context.Context) error {
+func (m *tMeshConnection) postAllBonds(ctx context.Context) error {
 	m.mu.Lock()
 	m.postBondCalls = append(m.postBondCalls, struct{}{})
 	m.mu.Unlock()
 
 	return m.postBondErr
+}
+
+func (m *tMeshConnection) addBonds(ctx context.Context, bonds []*bond.BondParams) error {
+	return nil
+}
+
+func (m *tMeshConnection) searchTopics(ctx context.Context, filters []string) ([]string, error) {
+	return filters, nil
 }
 
 func (m *tMeshConnection) kill() {}
@@ -156,19 +165,19 @@ func TestSubscribe(t *testing.T) {
 	c.setTestMeshConnection(mc)
 
 	// Subscribe to a topic successfully.
-	err := c.Subscribe(ctx, "topic-1", func(TopicEvent) {})
+	err := c.Subscribe(ctx, []string{"topic-1"}, func(topic string, ev TopicEvent) {})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if got := len(mc.subscribeCalls); got != 1 {
 		t.Fatalf("expected 1 subscribe call, got %d", got)
 	}
-	if mc.subscribeCalls[0] != "topic-1" {
+	if mc.subscribeCalls[0][0] != "topic-1" {
 		t.Fatalf("expected topic %q, got %q", "topic-1", mc.subscribeCalls[0])
 	}
 
 	// Subscribe to the same topic again should return ErrRedundantSubscription and not call mesh conn.
-	err = c.Subscribe(ctx, "topic-1", func(TopicEvent) {})
+	err = c.Subscribe(ctx, []string{"topic-1"}, func(topic string, ev TopicEvent) {})
 	if !errors.Is(err, ErrRedundantSubscription) {
 		t.Fatalf("expected ErrRedundantSubscription, got %v", err)
 	}
@@ -179,7 +188,7 @@ func TestSubscribe(t *testing.T) {
 	// Subscribe to another topic when meshConn returns an error.
 	wantErr := errors.New("subscribe failed")
 	mc.subscribeErr = wantErr
-	err = c.Subscribe(ctx, "topic-2", func(TopicEvent) {})
+	err = c.Subscribe(ctx, []string{"topic-2"}, func(topic string, ev TopicEvent) {})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -189,7 +198,7 @@ func TestSubscribe(t *testing.T) {
 	if got := len(mc.subscribeCalls); got != 2 {
 		t.Fatalf("expected 2 subscribe calls, got %d", got)
 	}
-	if mc.subscribeCalls[1] != "topic-2" {
+	if mc.subscribeCalls[1][0] != "topic-2" {
 		t.Fatalf("expected topic %q, got %q", "topic-2", mc.subscribeCalls[1])
 	}
 	if _, err := c.topicRegistry.fetchHandler("topic-2"); err == nil {
@@ -209,7 +218,7 @@ func TestSubscribe(t *testing.T) {
 	if got := len(mc.unsubscribeCalls); got != 1 {
 		t.Fatalf("expected 1 unsubscribe call, got %d", got)
 	}
-	if mc.unsubscribeCalls[0] != "topic-1" {
+	if mc.unsubscribeCalls[0][0] != "topic-1" {
 		t.Fatalf("expected topic %q, got %q", "topic-1", mc.unsubscribeCalls[0])
 	}
 	if _, err := c.topicRegistry.fetchHandler("topic-1"); err != nil {
@@ -225,7 +234,7 @@ func TestSubscribe(t *testing.T) {
 	if got := len(mc.unsubscribeCalls); got != 2 {
 		t.Fatalf("expected 2 unsubscribe calls, got %d", got)
 	}
-	if mc.unsubscribeCalls[1] != "topic-1" {
+	if mc.unsubscribeCalls[1][0] != "topic-1" {
 		t.Fatalf("expected topic %q, got %q", "topic-1", mc.unsubscribeCalls[1])
 	}
 	if _, err := c.topicRegistry.fetchHandler("topic-1"); err == nil {
@@ -263,13 +272,13 @@ func TestPushMessage(t *testing.T) {
 	}
 	handledCh := make(chan handled, 10)
 
-	handler1 := func(ev TopicEvent) { handledCh <- handled{topic: "topic-1", ev: ev} }
-	handler2 := func(ev TopicEvent) { handledCh <- handled{topic: "topic-2", ev: ev} }
+	handler1 := func(topic string, ev TopicEvent) { handledCh <- handled{topic: "topic-1", ev: ev} }
+	handler2 := func(topic string, ev TopicEvent) { handledCh <- handled{topic: "topic-2", ev: ev} }
 
-	if err := c.Subscribe(ctx, "topic-1", handler1); err != nil {
+	if err := c.Subscribe(ctx, []string{"topic-1"}, handler1); err != nil {
 		t.Fatalf("subscribe topic-1: %v", err)
 	}
-	if err := c.Subscribe(ctx, "topic-2", handler2); err != nil {
+	if err := c.Subscribe(ctx, []string{"topic-2"}, handler2); err != nil {
 		t.Fatalf("subscribe topic-2: %v", err)
 	}
 
@@ -393,7 +402,7 @@ func TestConcurrentBroadcasts(t *testing.T) {
 	testTopic := "concurrent-broadcast-test"
 
 	// Subscribe to the test topic.
-	err := c.Subscribe(ctx, testTopic, func(TopicEvent) {})
+	err := c.Subscribe(ctx, []string{testTopic}, func(topic string, ev TopicEvent) {})
 	if err != nil {
 		t.Fatalf("Unexpected error subscribing to topic %s: %v", testTopic, err)
 	}
@@ -402,7 +411,7 @@ func TestConcurrentBroadcasts(t *testing.T) {
 	if got := len(mc.subscribeCalls); got != 1 {
 		t.Fatalf("expected 1 subscribe call, got %d", got)
 	}
-	if mc.subscribeCalls[0] != testTopic {
+	if mc.subscribeCalls[0][0] != testTopic {
 		t.Fatalf("expected topic %q, got %q", testTopic, mc.subscribeCalls[0])
 	}
 
@@ -480,10 +489,10 @@ func TestConcurrentSubscribeUnsubscribe(t *testing.T) {
 
 	// Track which handlers were registered.
 	var handlerCalls atomic.Int32
-	handlers := make([]func(TopicEvent), workers)
+	handlers := make([]func(string, TopicEvent), workers)
 	for i := range workers {
 		idx := i
-		handlers[idx] = func(TopicEvent) {
+		handlers[idx] = func(_ string, ev TopicEvent) {
 			handlerCalls.Add(int32(idx + 1))
 		}
 	}
@@ -496,7 +505,7 @@ func TestConcurrentSubscribeUnsubscribe(t *testing.T) {
 	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
-			err := c.Subscribe(ctx, testTopic, handlers[idx])
+			err := c.Subscribe(ctx, []string{testTopic}, handlers[idx])
 			if err != nil {
 				errs <- err
 			}
@@ -587,7 +596,7 @@ func TestMalformedInput(t *testing.T) {
 
 	// Test 1: Subscribe with empty topic name should be rejected.
 	t.Run("Subscribe with empty topic", func(t *testing.T) {
-		err := c.Subscribe(ctx, emptyTopic, func(TopicEvent) {})
+		err := c.Subscribe(ctx, []string{emptyTopic}, func(topic string, ev TopicEvent) {})
 		if err == nil {
 			t.Fatal("Expected error when subscribing with empty topic, got nil")
 		}
@@ -656,7 +665,7 @@ func TestMalformedInput(t *testing.T) {
 	// Test 4: Subscribe with nil handler should be rejected.
 	t.Run("Subscribe with nil handler", func(t *testing.T) {
 		validTopic := "valid-topic"
-		err := c.Subscribe(ctx, validTopic, nil)
+		err := c.Subscribe(ctx, []string{validTopic}, nil)
 		if err == nil {
 			t.Fatal("Expected error when subscribing with nil handler, got nil")
 		}

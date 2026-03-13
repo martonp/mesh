@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
-	"github.com/decred/slog"
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/bisoncraft/mesh/bond"
 	"github.com/bisoncraft/mesh/codec"
 	"github.com/bisoncraft/mesh/protocols"
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"
+	"github.com/decred/slog"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
 )
@@ -94,36 +95,43 @@ func (m *meshConnection) run(ctx context.Context) error {
 	m.cancelFunc = cancel
 	m.cancelFuncMtx.Unlock()
 
-	// Post the bonds associated with the connection.The mesh connection is required to have
-	// adequate bond strength in order to establish a push stream.
-	if err := m.postBond(runCtx); err != nil {
-		return err
-	}
-
-	if m.bondInfo.BondStrength() < bond.MinRequiredBondStrength {
-		return fmt.Errorf("%s: connection does not have the minimum required bond strength to establish a push stream", m.host.ID())
+	if m.bondInfo.BondStrength() > 0 {
+		// Post the bonds associated with the connection.The mesh connection is required to have
+		// adequate bond strength in order to establish a push stream.
+		if err := m.postAllBonds(runCtx); err != nil {
+			return err
+		}
 	}
 
 	return m.runPushStream(runCtx)
 }
 
 // subscribe subscribes to the provided topic.
-func (m *meshConnection) subscribe(ctx context.Context, topic string) error {
+func (m *meshConnection) subscribe(ctx context.Context, topics []string) error {
 	s, err := m.host.NewStream(ctx, m.peerID, protocols.ClientSubscribeProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to create stream: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	req := &protocolsPb.SubscribeRequest{
-		Topic:     topic,
-		Subscribe: true,
+	req := &protocolsPb.SubscribeRequest{Topics: topics}
+	if err := codec.WriteLengthPrefixedMessage(s, req); err != nil {
+		return fmt.Errorf("failed to write subscribe request: %w", err)
 	}
-	return codec.WriteLengthPrefixedMessage(s, req)
+
+	resp := &protocolsPb.Success{}
+	if err := codec.ReadLengthPrefixedMessage(s, resp); err != nil {
+		return fmt.Errorf("failed to read subscribe response: %w", err)
+	}
+
+	return nil
 }
 
 // broadcast publishes the provided message bytes on a mesh topic.
 func (m *meshConnection) broadcast(ctx context.Context, topic string, data []byte) error {
+	if m.bondInfo.BondStrength() < bond.MinRequiredBondStrength {
+		return fmt.Errorf("%s: connection does not have the minimum required bond strength to publish", m.host.ID())
+	}
 	s, err := m.host.NewStream(ctx, m.peerID, protocols.ClientPublishProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to create stream: %w", err)
@@ -138,22 +146,28 @@ func (m *meshConnection) broadcast(ctx context.Context, topic string, data []byt
 }
 
 // unsubscribe unsubscribes from the provided topic.
-func (m *meshConnection) unsubscribe(ctx context.Context, topic string) error {
+func (m *meshConnection) unsubscribe(ctx context.Context, topics []string) error {
 	s, err := m.host.NewStream(ctx, m.peerID, protocols.ClientSubscribeProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to create stream: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	req := &protocolsPb.SubscribeRequest{
-		Topic:     topic,
-		Subscribe: false,
+	req := &protocolsPb.SubscribeRequest{Topics: topics}
+	if err := codec.WriteLengthPrefixedMessage(s, req); err != nil {
+		return fmt.Errorf("failed to write unsubscribe request: %w", err)
 	}
-	return codec.WriteLengthPrefixedMessage(s, req)
+
+	resp := &protocolsPb.Success{}
+	if err := codec.ReadLengthPrefixedMessage(s, resp); err != nil {
+		return fmt.Errorf("failed to read unsubscribe response: %w", err)
+	}
+
+	return nil
 }
 
-// postBondInternal posts the provided bond request.
-func (m *meshConnection) postBondInternal(ctx context.Context, req *protocolsPb.PostBondRequest) error {
+// postBondsInternal posts the provided bond request.
+func (m *meshConnection) postBondsInternal(ctx context.Context, req *protocolsPb.PostBondRequest) error {
 	// Post the provided bond.
 	s, err := m.host.NewStream(ctx, m.peerID, protocols.PostBondsProtocol)
 	if err != nil {
@@ -179,12 +193,12 @@ func (m *meshConnection) postBondInternal(ctx context.Context, req *protocolsPb.
 		switch v.Error.GetError().(type) {
 		case *protocolsPb.Error_PostBondError:
 			bondErr := v.Error.GetPostBondError()
-			err := m.bondInfo.RemoveBondAtIndex(bondErr.InvalidBondIndex)
-			if err != nil {
-				return fmt.Errorf("failed to remove invalid bond at index %d: %v", bondErr.InvalidBondIndex, err)
+			idx := int(bondErr.InvalidBondIndex)
+			if idx >= len(req.Bonds) {
+				return fmt.Errorf("invalid bond index %d in post bond error", bondErr.InvalidBondIndex)
 			}
-
-			m.log.Infof("%s: removed invalid bond at index %d", hostID, bondErr.InvalidBondIndex)
+			invalidBond := string(req.Bonds[idx].BondID)
+			m.log.Infof("%s rejected bond %s at request index %d", hostID, invalidBond, idx)
 			return errInvalidBondIndex
 
 		case *protocolsPb.Error_Message:
@@ -196,8 +210,9 @@ func (m *meshConnection) postBondInternal(ctx context.Context, req *protocolsPb.
 		}
 
 	case *protocolsPb.Response_PostBondResponse:
-		resp := v.PostBondResponse
-		m.log.Infof("%s: bond strength is %d", hostID, resp.BondStrength)
+		postedStrength := v.PostBondResponse.BondStrength
+		m.log.Infof("posted %d bonds with strength %d to %s. new strength: %d",
+			len(req.Bonds), postedStrength, hostID, m.bondInfo.BondStrength())
 		return nil
 
 	default:
@@ -205,9 +220,9 @@ func (m *meshConnection) postBondInternal(ctx context.Context, req *protocolsPb.
 	}
 }
 
-// postBond posts the connection's bond, retrying on invalid bond index errors. This needs to be
+// postAllBonds posts the connection's bond, retrying on invalid bond index errors. This needs to be
 // called before the connection's push stream is established.
-func (m *meshConnection) postBond(ctx context.Context) error {
+func (m *meshConnection) postAllBonds(ctx context.Context) error {
 	hostID := m.host.ID()
 	for range maxPostBondRetries {
 		req, err := bond.PostBondReqFromBondInfo(m.bondInfo)
@@ -215,7 +230,7 @@ func (m *meshConnection) postBond(ctx context.Context) error {
 			return fmt.Errorf("failed to create post bond request: %w", err)
 		}
 
-		err = m.postBondInternal(ctx, req)
+		err = m.postBondsInternal(ctx, req)
 		if err == nil {
 			return nil
 		}
@@ -234,6 +249,25 @@ func (m *meshConnection) postBond(ctx context.Context) error {
 	}
 
 	return fmt.Errorf("%s: maximum retry attempts for posting bond reached", hostID)
+}
+
+func (m *meshConnection) addBonds(ctx context.Context, bonds []*bond.BondParams) error {
+	if len(bonds) == 0 {
+		return fmt.Errorf("cannot add 0 bonds")
+	}
+
+	req := &protocolsPb.PostBondRequest{}
+	for _, bp := range bonds {
+		req.Bonds = append(req.Bonds, &protocolsPb.Bond{BondID: []byte(bp.ID)})
+	}
+
+	if err := m.postBondsInternal(ctx, req); err != nil {
+		return fmt.Errorf("failed to post bonds: %w", err)
+	}
+
+	m.bondInfo.AddBonds(bonds, time.Now())
+
+	return nil
 }
 
 // kill terminates the mesh connection.
@@ -297,6 +331,31 @@ func (m *meshConnection) fetchAvailableMeshNodes(ctx context.Context) ([]peer.Ad
 	default:
 		return nil, fmt.Errorf("unexpected response type: %T", v)
 	}
+}
+
+func (m *meshConnection) searchTopics(ctx context.Context, filters []string) ([]string, error) {
+	// Post the provided bond.
+	s, err := m.host.NewStream(ctx, m.peerID, protocols.SearchTopicsProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stream: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	req := &protocolsPb.SearchTopicsRequest{
+		Filters: filters,
+	}
+
+	err = codec.WriteLengthPrefixedMessage(s, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write search topics request: %w", err)
+	}
+
+	resp := &protocolsPb.SearchTopicsResponse{}
+	if err := codec.ReadLengthPrefixedMessage(s, resp); err != nil {
+		return nil, fmt.Errorf("failed to read search topics response: %w", err)
+	}
+
+	return resp.Topics, nil
 }
 
 // openPushStream creates a new push stream to the remote peer, sends the initial

@@ -10,18 +10,13 @@ import (
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
 func TestMeshConnectionManagerFailover(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	h, err := libp2p.New()
-	if err != nil {
-		t.Fatalf("failed to create host: %v", err)
-	}
-	defer func() { _ = h.Close() }()
 
 	logBackend := slog.NewBackend(os.Stdout)
 	logger := logBackend.Logger("mesh-conn-manager-test")
@@ -55,11 +50,17 @@ func TestMeshConnectionManagerFailover(t *testing.T) {
 		}
 	}
 
+	h, err := libp2p.New()
+	if err != nil {
+		t.Fatalf("failed to create host: %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	h.Peerstore().AddAddrs(node1ID, node1Info.Addrs, peerstore.PermanentAddrTTL)
 	m := newMeshConnectionManager(&meshConnectionManagerConfig{
-		host:           h,
-		log:            logger,
-		connFactory:    connFactory,
-		bootstrapPeers: []peer.AddrInfo{node1Info},
+		host:        h,
+		log:         logger,
+		connFactory: connFactory,
 	})
 
 	done := make(chan struct{})

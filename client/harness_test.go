@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/mesh/bond"
 	"github.com/decred/slog"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/bisoncraft/mesh/bond"
 )
 
 func TestMain(m *testing.M) {
@@ -266,12 +266,12 @@ func TestClientIntegration(t *testing.T) {
 	}
 
 	// Ensure the c1 and c2 can post bonds.
-	err = c1.PostBond(ctx)
+	err = c1.PostAllBonds(ctx)
 	if err != nil {
 		t.Fatalf("Unexpected error posting bonds for c1: %v", err)
 	}
 
-	err = c2.PostBond(ctx)
+	err = c2.PostAllBonds(ctx)
 	if err != nil {
 		t.Fatalf("Unexpected error posting bonds for c2: %v", err)
 	}

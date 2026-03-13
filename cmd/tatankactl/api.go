@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gorilla/websocket"
 	"github.com/bisoncraft/mesh/oracle"
 	"github.com/bisoncraft/mesh/tatanka/admin"
 	"github.com/bisoncraft/mesh/tatanka/types"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gorilla/websocket"
 )
 
 // --- Navigation messages ---
@@ -590,4 +590,3 @@ func computeConsensusInfo(state *admin.AdminState, currentWl, proposedWl []strin
 
 	return info
 }
-

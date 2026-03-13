@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
 	"github.com/bisoncraft/mesh/oracle/sources/utils"
+	"github.com/decred/slog"
 )
 
 // NewCoinMarketCapSource creates a CoinMarketCap price source.

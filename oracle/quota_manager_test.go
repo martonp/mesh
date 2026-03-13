@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
+	"github.com/decred/slog"
 )
 
 func newTestQuotaManager(nodeID string, srcs []sources.Source) (*quotaManager, *[]*OracleSnapshot) {

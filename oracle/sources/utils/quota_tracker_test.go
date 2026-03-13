@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
+	"github.com/decred/slog"
 )
 
 // newTestPool creates a QuotaTracker whose FetchQuota always errors.

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
 	"github.com/bisoncraft/mesh/oracle/sources/providers"
+	"github.com/decred/slog"
 )
 
 // Ticker is the upper-case symbol used to indicate an asset.

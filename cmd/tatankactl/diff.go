@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bisoncraft/mesh/tatanka/admin"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type diffModel struct {

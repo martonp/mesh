@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bisoncraft/mesh/tatanka/admin"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/bisoncraft/mesh/tatanka/admin"
 )
 
 type connectionsModel struct {

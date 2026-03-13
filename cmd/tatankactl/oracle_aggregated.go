@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bisoncraft/mesh/oracle"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type oracleAggregatedModel struct {

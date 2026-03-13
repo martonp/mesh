@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bisoncraft/mesh/oracle"
 	"github.com/bisoncraft/mesh/tatanka/admin"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // rootModel is the top-level bubbletea model that routes between views.
@@ -282,7 +282,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.whitelistView.statusMsg = "Proposal cleared"
 		}
 		return m, nil
-
 
 	case renderTickMsg:
 		if m.isOracleView() {

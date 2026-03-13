@@ -13,8 +13,8 @@ import (
 func TestNewUnlimitedSource_FullConfig(t *testing.T) {
 	called := false
 	s := NewUnlimitedSource(UnlimitedSourceConfig{
-		Name:   "test",
-		Weight: 0.5,
+		Name:      "test",
+		Weight:    0.5,
 		MinPeriod: 10 * time.Second,
 		FetchRates: func(ctx context.Context) (*sources.RateInfo, error) {
 			called = true

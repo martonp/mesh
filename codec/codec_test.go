@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/mesh/protocols"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/bisoncraft/mesh/protocols"
 	"google.golang.org/protobuf/proto"
 
 	protocolsPb "github.com/bisoncraft/mesh/protocols/pb"

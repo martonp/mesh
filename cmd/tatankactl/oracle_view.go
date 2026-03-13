@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bisoncraft/mesh/oracle"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/bisoncraft/mesh/oracle"
 )
 
 type oracleModel struct {

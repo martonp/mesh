@@ -8,9 +8,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
 	"github.com/bisoncraft/mesh/oracle/sources/utils"
+	"github.com/decred/slog"
 )
 
 // NewBlockcypherLitecoinSource creates a BlockCypher Litecoin fee rate source.

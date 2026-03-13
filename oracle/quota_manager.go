@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decred/slog"
 	"github.com/bisoncraft/mesh/oracle/sources"
+	"github.com/decred/slog"
 )
 
 // TimestampedQuotaStatus wraps a QuotaStatus with the time it was received.

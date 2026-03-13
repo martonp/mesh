@@ -5,8 +5,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/bisoncraft/mesh/tatanka/admin"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Colors

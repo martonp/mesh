@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/bisoncraft/mesh/bond"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type bondStorage interface {
@@ -43,7 +43,6 @@ func (bs *memoryBondStorage) addBonds(peerID peer.ID, bonds []*bond.BondParams) 
 	bs.mtx.Unlock()
 
 	now := bs.timeNow()
-	clientInfo.ClearExpiredBonds(now)
 	clientInfo.AddBonds(bonds, now)
 
 	return clientInfo.BondStrength()
@@ -59,6 +58,5 @@ func (bs *memoryBondStorage) bondStrength(peerID peer.ID) uint32 {
 	}
 	bs.mtx.RUnlock()
 
-	clientInfo.ClearExpiredBonds(bs.timeNow())
 	return clientInfo.BondStrength()
 }

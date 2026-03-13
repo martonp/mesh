@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/bisoncraft/mesh/bond"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func TestMemoryBondStorage(t *testing.T) {
@@ -53,13 +53,13 @@ func TestMemoryBondStorage(t *testing.T) {
 	}
 
 	// Advance time - bond1 expires
-	mockTime = mockTime.Add(90 * time.Minute)
+	bonds[0].Expiry = mockTime.Add(-time.Hour)
 	if strength := storage.bondStrength(peerID1); strength != 50 {
 		t.Errorf("Expected strength 50 after expiry, got %d", strength)
 	}
 
-	// Advance time - all bonds expire
-	mockTime = mockTime.Add(2 * time.Hour)
+	// Both bonds expired
+	bonds[1].Expiry = mockTime.Add(-time.Hour)
 	if strength := storage.bondStrength(peerID1); strength != 0 {
 		t.Errorf("Expected strength 0 after all expire, got %d", strength)
 	}
